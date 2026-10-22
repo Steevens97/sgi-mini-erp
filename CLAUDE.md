@@ -47,6 +47,10 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   qui pourrait rouvrir l'inscription publique).
 - Appliquées par l'intégration GitHub de Supabase à chaque push sur `main`
   (« Deploy to production », working directory `.`, pas de branches de prévisualisation).
+  L'intégration ne réagit qu'aux push faits APRÈS son activation (constaté le 22/10/2026).
+  Après un push : check « Supabase Preview » sur le commit GitHub (≈1 min).
+- Témoin : `public.migrations_appliquees()` (clé secrète uniquement) liste les versions appliquées.
+  Sans clé secrète : un appel avec la clé publique répond 42501 si la fonction existe, PGRST202 sinon.
 - UNE MIGRATION S'APPLIQUE UNE SEULE FOIS : modifier un fichier déjà appliqué ne le rejoue pas →
   toujours un NOUVEAU fichier.
 - Un seul fichier par module.
