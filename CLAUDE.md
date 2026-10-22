@@ -86,3 +86,22 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   (email de la fiche, rattachement, rôle, mot de passe provisoire affiché UNE fois) ; changer un
   rôle ; réinitialiser un mot de passe ; révoquer sans supprimer la fiche ; rattacher un compte
   existant à une fiche.
+
+## État d'avancement (à tenir à jour)
+- Étape 1 FAITE : outillage, migrations 20261022120000 (vérif. socle) et 20261022130000 (témoin) appliquées.
+- Étape 2 FAITE : squelette Next.js 16.4 (cacheComponents désactivé), /connexion, proxy.ts de
+  redirection, menu, bandeaux « profil illisible » / « non rattaché ». Testé : redirections + mauvais
+  identifiants. PAS encore testé connecté (le 1er compte créé devient admin : ne pas créer de compte
+  jetable avant celui de l'utilisateur).
+- Étape 3 À FAIRE : page /inscription à usage unique (création côté serveur, email_confirm: true,
+  refus si un compte existe déjà, puis connexion directe) → compte admin de l'utilisateur → tester
+  menu admin → supprimer la page → guider la fermeture de l'inscription (Authentication → Sign In /
+  Providers → « Allow new users to sign up » désactivé) → prouver par un vrai signUp refusé.
+- Étape 4 : migration sécurité (mon_role, mon_collaborateur_id, est_admin, RLS profiles/collaborateurs).
+- Étape 5 : écran Utilisateurs ; puis comptes de test manager + collaborateur, reconnexion en collaborateur.
+
+## Tests locaux dans le conteneur cloud
+- Le serveur Node doit passer par le proxy : lancer avec
+  `NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt npx next start -p 3100`.
+- Navigateur : Playwright avec `executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"`.
+- `.env.local` est régénéré depuis les variables d'environnement de la session (jamais commité).
