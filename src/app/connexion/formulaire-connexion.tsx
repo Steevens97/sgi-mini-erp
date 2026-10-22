@@ -4,7 +4,7 @@ import { useActionState } from "react";
 import { seConnecter } from "./actions";
 import type { EtatConnexion } from "./etat";
 
-const etatInitial: EtatConnexion = { erreur: null };
+const etatInitial: EtatConnexion = { erreur: null, email: "" };
 
 export function FormulaireConnexion() {
   const [etat, action, enCours] = useActionState(seConnecter, etatInitial);
@@ -19,6 +19,7 @@ export function FormulaireConnexion() {
           id="email"
           name="email"
           type="email"
+          defaultValue={etat.email}
           autoComplete="email"
           required
           className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 focus:border-slate-500 focus:outline-none"

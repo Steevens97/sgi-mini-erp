@@ -26,4 +26,5 @@ export const ENTREES_MENU: EntreeMenu[] = [
 ];
 
 // Pages accessibles sans être connecté.
-export const PAGES_PUBLIQUES = ["/connexion"];
+// /inscription est temporaire : elle sera supprimée après la création du premier compte.
+export const PAGES_PUBLIQUES = ["/connexion", "/inscription"];

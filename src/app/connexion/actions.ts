@@ -12,7 +12,7 @@ export async function seConnecter(
   const motDePasse = String(donnees.get("mot_de_passe") ?? "");
 
   if (!email || !motDePasse) {
-    return { erreur: "Saisissez votre email et votre mot de passe." };
+    return { email, erreur: "Saisissez votre email et votre mot de passe." };
   }
 
   const supabase = await creerClientServeur();
@@ -22,7 +22,7 @@ export async function seConnecter(
   });
 
   if (error) {
-    return { erreur: traduireErreur(error.code, error.message) };
+    return { email, erreur: traduireErreur(error.code, error.message) };
   }
   redirect("/");
 }
