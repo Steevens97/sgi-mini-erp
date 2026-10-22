@@ -1,0 +1,19 @@
+# dépendances et constructions
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets : jamais commités
+.env
+.env.*
+!.env.exemple
+
+# divers
+.DS_Store
+*.log
+.vercel
+supabase/.temp/
+supabase/.branches/
