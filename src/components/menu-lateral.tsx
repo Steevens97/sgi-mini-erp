@@ -45,6 +45,9 @@ export function MenuLateral({ email, role }: Proprietes) {
           {email}
         </p>
         <p className="text-slate-400">{role ? LIBELLES_ROLES[role] : "Rôle inconnu"}</p>
+        <Link href="/changer-mot-de-passe" className="mt-2 block text-slate-400 underline hover:text-slate-200">
+          Changer mon mot de passe
+        </Link>
         <form action={seDeconnecter} className="mt-3">
           <button
             type="submit"

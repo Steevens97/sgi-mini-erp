@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { PAGES_PUBLIQUES } from "@/lib/navigation";
+import { INDICATEUR_CHANGEMENT_MDP } from "@/lib/utilisateurs";
 
 // Le nom du fichier (proxy.ts) et de la fonction (proxy) sont imposés par Next.js.
 // À chaque requête : rafraîchit la session Supabase, puis redirige un visiteur
-// non connecté vers /connexion (et un utilisateur connecté hors de /connexion).
+// non connecté vers /connexion (et un utilisateur connecté hors de /connexion),
+// et impose le remplacement d'un mot de passe provisoire.
 export async function proxy(requete: NextRequest) {
   let reponse = NextResponse.next({ request: requete });
 
@@ -47,8 +49,17 @@ export async function proxy(requete: NextRequest) {
   if (user && pagePublique) {
     return rediriger(requete, reponse, "/");
   }
+  // Mot de passe provisoire : aucune autre page (ni action serveur) avant son remplacement.
+  if (
+    user?.app_metadata?.[INDICATEUR_CHANGEMENT_MDP] === true &&
+    chemin !== PAGE_CHANGEMENT_MDP
+  ) {
+    return rediriger(requete, reponse, PAGE_CHANGEMENT_MDP);
+  }
   return reponse;
 }
+
+const PAGE_CHANGEMENT_MDP = "/changer-mot-de-passe";
 
 // Redirige en conservant les cookies de session éventuellement rafraîchis.
 function rediriger(requete: NextRequest, reponse: NextResponse, chemin: string) {

@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { creerClientServeur } from "@/lib/supabase/serveur";
 import type { EtatConnexion } from "./etat";
+import { INDICATEUR_CHANGEMENT_MDP } from "@/lib/utilisateurs";
 
 export async function seConnecter(
   _etatPrecedent: EtatConnexion,
@@ -16,7 +17,7 @@ export async function seConnecter(
   }
 
   const supabase = await creerClientServeur();
-  const { error } = await supabase.auth.signInWithPassword({
+  const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password: motDePasse,
   });
@@ -24,7 +25,8 @@ export async function seConnecter(
   if (error) {
     return { email, erreur: traduireErreur(error.code, error.message) };
   }
-  redirect("/");
+  // Mot de passe provisoire : direction le changement obligatoire.
+  redirect(data.user?.app_metadata?.[INDICATEUR_CHANGEMENT_MDP] === true ? "/changer-mot-de-passe" : "/");
 }
 
 export async function seDeconnecter() {
