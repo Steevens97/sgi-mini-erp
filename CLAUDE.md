@@ -156,8 +156,13 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   client ni projet, avenant rendant la mission négative refusé, écrans collaborateur (consultation, pas de PDF,
   pas de coordonnées, pas d'actions), bandeau d'émission bloquée ; nettoyage complet ; tests_verrouillage 189/189 ;
   instantane_complet identique (seul ajout depuis le temps 1 : espace `devis`, vide) ; aucun compteur.
-- Défaut mineur relevé (essais seulement, NON corrigé — exigerait une migration) : le client créé à l'acceptation
-  d'un devis d'essai s'appelle « [ESSAI] [ESSAI] Société » (préfixe ajouté au nom de société qui l'a déjà).
+- RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (23/10/2026), émission réelle toujours bloquée.
+- POINTS À TRAITER (Commercial) :
+  1. Coordonnées réelles de SG Ingénierie (COORDONNEES_SG_INGENIERIE) à fournir par l'utilisateur.
+  2. Obligations d'assurance par type de mission (OBLIGATIONS_ASSURANCE, « a_confirmer ») à valider avec l'assureur.
+  3. Défaut mineur, essais seulement : le client créé à l'acceptation d'un devis d'essai s'appelle
+     « [ESSAI] [ESSAI] Société ». Décision de l'utilisateur : AUCUNE migration pour ce seul défaut ; à corriger
+     plus tard, dans une migration qui aura d'autres raisons d'exister.
 
 ### Arbitrages DÉFINITIFS de l'utilisateur (23/10/2026) — ne plus les redemander
 - `devis.type_mission` approuvé (conseil, amo, moex, opc, donnees, drone, autre).
