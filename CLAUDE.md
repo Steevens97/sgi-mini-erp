@@ -70,6 +70,20 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 - La vérification « admin ? » est refaite dans chaque action serveur, pas seulement à l'affichage.
 - Un admin ne peut ni se rétrograder ni se révoquer lui-même.
 
+## Verrouillage en base (migration 20261023120000) — à respecter dans chaque module
+- `acces_actif()` : compte existant, non banni, `doit_changer_mot_de_passe` levé, session du jeton
+  encore présente dans auth.sessions. `mon_role()`, `mon_collaborateur_id()`, `est_admin()` renvoient
+  null/faux sinon. Toute nouvelle règle RLS doit passer par ces fonctions, écrites `(select public.f())`.
+- Les 11 tables métier sont « admin seulement » (règle `<table>_admin_seulement`) : chaque module
+  remplace cette règle par les siennes (balayage pg_policies), sans jamais revenir à `true`.
+- Visiteur anonyme : aucun droit sur les 13 tables.
+- `collaborateurs.taux_horaire` : droit de colonne retiré à `authenticated` → toujours lister les
+  colonnes (jamais `select=*`, jamais `return=representation` sans `select=`). Lecture des taux :
+  `taux_horaires_collaborateurs()` (admin actif seulement).
+- `prochain_numero` : jamais pour anon ; à exposer proprement dans le module Finance.
+- Bucket `justificatifs` : admin seulement (règle `justificatifs_admin_seulement`).
+- Tests : `tests-reels/tests_verrouillage.py` (113 appels directs) + `instantane.py` (empreinte des données).
+
 ## Pièges
 - Compte sans `collaborateur_id` = ne voit rien, sans erreur → afficher un avertissement VISIBLE.
 - `SUPABASE_SERVICE_ROLE_KEY` est SECRÈTE : jamais de préfixe `NEXT_PUBLIC_`, jamais commitée,

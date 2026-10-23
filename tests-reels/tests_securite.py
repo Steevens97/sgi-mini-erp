@@ -160,14 +160,14 @@ def tester():
     s, r = appel("PATCH", f"/rest/v1/profiles?id=eq.{moi}", ANON, j, corps={"collaborateur_id": None}, entetes=retour)
     verifier("peut modifier son propre rattachement", len(lignes(r)) == 1, f"HTTP {s}")
     s, fiche = appel("GET", f"/rest/v1/collaborateurs?id=eq.{LEA}&select=poste", SECRET)
-    s, r = appel("PATCH", f"/rest/v1/collaborateurs?id=eq.{LEA}", ANON, j, corps={"poste": fiche[0]["poste"]}, entetes=retour)
+    s, r = appel("PATCH", f"/rest/v1/collaborateurs?id=eq.{LEA}&select=id", ANON, j, corps={"poste": fiche[0]["poste"]}, entetes=retour)
     verifier("PEUT modifier une fiche (valeur réécrite à l'identique)", len(lignes(r)) == 1, f"HTTP {s}")
-    s, r = appel("POST", "/rest/v1/collaborateurs", ANON, j,
-                 corps={"nom": "Fiche-jetable-test", "taux_horaire": 0}, entetes=retour)
+    s, r = appel("POST", "/rest/v1/collaborateurs?select=id", ANON, j,
+                 corps={"nom": "Fiche-jetable-test", "email": "fiche-test@exemple.invalid", "taux_horaire": 0}, entetes=retour)
     ok = s == 201 and len(lignes(r)) == 1
     verifier("PEUT créer une fiche", ok, f"HTTP {s}")
     if ok:
-        s, r2 = appel("DELETE", f"/rest/v1/collaborateurs?id=eq.{r[0]['id']}", ANON, j, entetes=retour)
+        s, r2 = appel("DELETE", f"/rest/v1/collaborateurs?id=eq.{r[0]['id']}&select=id", ANON, j, entetes=retour)
         verifier("PEUT supprimer cette fiche de test", len(lignes(r2)) == 1, f"HTTP {s}")
 
     print("\n== Votre compte sgi@gmx.fr")
