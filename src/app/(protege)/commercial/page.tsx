@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { lireUtilisateurCourant } from "@/lib/session";
 import { creerClientServeur } from "@/lib/supabase/serveur";
-import { coordonneesEmetteur, champsEmetteurManquants } from "@/lib/entreprise";
+import { champsEmetteurManquants, coordonneesEmetteur } from "@/lib/entreprise";
 import { LIBELLES_STATUT_DEVIS, LIBELLES_STATUT_PROSPECT, dateFr, euros } from "@/lib/format";
 
 type Prospect = { id: string; nom: string; societe: string | null; statut: string; essai: boolean };

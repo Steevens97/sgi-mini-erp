@@ -3,7 +3,7 @@ import { creerClientAdmin } from "@/lib/supabase/admin";
 import { creerClientServeur } from "@/lib/supabase/serveur";
 import { genererPdfDevis, type InstantaneDevis } from "@/lib/devis/pdf";
 import { archiverPdfDevis, lireArchiveVerifiee, type BaseDevis, type StockageDevis } from "@/lib/devis/archivage";
-import { COORDONNEES_DEMO, coordonneesEmetteur } from "@/lib/entreprise";
+import { COORDONNEES_DEMO, coordonneesEmetteur, emetteurPourMission, type TypeMission } from "@/lib/entreprise";
 
 const BUCKET = "devis";
 
@@ -95,7 +95,7 @@ export async function pdfBrouillon(devisId: string): Promise<{ nom: string; cont
   const supabase = await creerClientServeur();
   const { data: d } = await supabase
     .from("devis")
-    .select("id, essai, statut, total_ht, tva, total_ttc, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva, remplace_devis_id, avenant_du_devis_id, prospects(nom, societe, email, telephone, adresse, code_postal, ville, pays)")
+    .select("id, essai, statut, type_mission, total_ht, tva, total_ttc, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva, remplace_devis_id, avenant_du_devis_id, prospects(nom, societe, email, telephone, adresse, code_postal, ville, pays)")
     .eq("id", devisId)
     .eq("statut", "brouillon")
     .maybeSingle();
@@ -112,7 +112,11 @@ export async function pdfBrouillon(devisId: string): Promise<{ nom: string; cont
     essai: d.essai,
     numero: null,
     date_emission: new Date().toISOString().slice(0, 10),
-    emetteur: (d.essai ? COORDONNEES_DEMO : coordonneesEmetteur()) as unknown as Record<string, string>,
+    emetteur: d.essai
+      ? (COORDONNEES_DEMO as unknown as Record<string, string>)
+      : d.type_mission
+        ? emetteurPourMission(d.type_mission as TypeMission)
+        : (coordonneesEmetteur() as unknown as Record<string, string>),
     destinataire: { prospect: (d.prospects as unknown as Record<string, string | null>) ?? {} },
     lignes: (lignes ?? []).map((l) => ({ ...l, quantite: Number(l.quantite), prix_unitaire: Number(l.prix_unitaire), montant_ht: Number(l.montant_ht) })),
     totaux: { total_ht: Number(d.total_ht), tva: Number(d.tva), total_ttc: Number(d.total_ttc) },

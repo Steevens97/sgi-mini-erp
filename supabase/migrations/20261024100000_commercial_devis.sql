@@ -57,7 +57,9 @@ alter table public.prospects
   add column if not exists pays text,
   add column if not exists essai boolean not null default false;
 alter table public.devis
-  add column if not exists essai boolean not null default false;
+  add column if not exists essai boolean not null default false,
+  -- Type de mission de SG Ingénierie : détermine les informations d'assurance exigées à l'émission.
+  add column if not exists type_mission text;
 
 -- C. Envoi déclaré ; émission ; décision du client
 alter table public.devis
@@ -202,7 +204,8 @@ begin
      where conrelid in ('public.devis'::regclass, 'public.factures'::regclass, 'public.devis_lignes'::regclass)
        and conname in ('devis_statut_liste', 'devis_traitement_tva', 'factures_traitement_tva',
                        'devis_totaux_coherents', 'devis_numero_selon_statut', 'devis_canal_envoi_liste',
-                       'devis_pdf_statut_liste', 'devis_un_seul_lien', 'devis_pas_lien_soi_meme')
+                       'devis_pdf_statut_liste', 'devis_un_seul_lien', 'devis_pas_lien_soi_meme',
+                       'devis_type_mission_liste')
   loop
     execute format('alter table %s drop constraint %I', v_contrainte.table_nom, v_contrainte.conname);
   end loop;
@@ -220,6 +223,8 @@ alter table public.devis add constraint devis_totaux_coherents
   not valid;
 alter table public.devis add constraint devis_numero_selon_statut
   check ((statut = 'brouillon') = (numero is null)) not valid;
+alter table public.devis add constraint devis_type_mission_liste
+  check (type_mission is null or type_mission in ('conseil', 'amo', 'moex', 'opc', 'donnees', 'drone', 'autre'));
 alter table public.devis add constraint devis_canal_envoi_liste
   check (canal_envoi is null or canal_envoi in ('email', 'main_propre', 'courrier', 'plateforme', 'autre'));
 alter table public.devis add constraint devis_pdf_statut_liste
@@ -272,8 +277,11 @@ as $$
 $$;
 
 -- Coordonnées de l'émetteur (SG Ingénierie) : champs indispensables, sinon émission bloquée.
--- La liste est à valider par l'utilisateur et son expert-comptable (voir CLAUDE.md).
-create or replace function public.controle_emetteur(p_emetteur jsonb)
+-- Assurance : exigée selon la mission. L'application transmet « obligation_assurance » (obligatoire ou
+-- non_requise), décidée par l'utilisateur pour chaque type de mission ; « a_confirmer » bloque.
+-- La maîtrise d'œuvre d'exécution (MOEx) relève de l'assurance décennale obligatoire (C. assur.
+-- L241-1, C. civ. 1792-1) : la base l'impose. Aucune couverture ni attestation n'est inventée.
+create or replace function public.controle_emetteur(p_emetteur jsonb, p_type_mission text)
 returns text
 language plpgsql
 immutable
@@ -282,13 +290,16 @@ as $$
 declare
   v_manquants text[] := '{}';
   v_cle text;
+  v_obligation text := p_emetteur ->> 'obligation_assurance';
 begin
   if p_emetteur is null or jsonb_typeof(p_emetteur) <> 'object' then
     return 'coordonnées de l''émetteur absentes';
   end if;
+  if p_type_mission is null then
+    return 'type de mission non renseigné';
+  end if;
   foreach v_cle in array array['raison_sociale', 'forme_juridique', 'adresse', 'code_postal', 'ville', 'siret',
-                               'immatriculation', 'tva_intracom', 'validite_jours', 'assurance_assureur',
-                               'assurance_contrat', 'assurance_couverture'] loop
+                               'immatriculation', 'tva_intracom', 'validite_jours'] loop
     if coalesce(trim(p_emetteur ->> v_cle), '') = '' then
       v_manquants := v_manquants || v_cle;
     end if;
@@ -306,6 +317,23 @@ begin
   end if;
   if (p_emetteur ->> 'validite_jours') !~ '^[1-9][0-9]*$' then
     return 'durée de validité du devis invalide (nombre de jours)';
+  end if;
+
+  if v_obligation is null or v_obligation not in ('obligatoire', 'non_requise') then
+    return 'obligation d''assurance non déterminée pour ce type de mission (à confirmer avec votre assureur)';
+  end if;
+  if p_type_mission = 'moex' and v_obligation <> 'obligatoire' then
+    return 'maîtrise d''œuvre d''exécution : assurance décennale obligatoire';
+  end if;
+  if v_obligation = 'obligatoire' then
+    foreach v_cle in array array['assurance_assureur', 'assurance_contrat', 'assurance_couverture'] loop
+      if coalesce(trim(p_emetteur ->> v_cle), '') = '' then
+        v_manquants := v_manquants || v_cle;
+      end if;
+    end loop;
+    if array_length(v_manquants, 1) > 0 then
+      return 'assurance obligatoire pour cette mission : ' || array_to_string(v_manquants, ', ') || ' manquant(s)';
+    end if;
   end if;
   return null;
 end
@@ -351,6 +379,7 @@ as $$
   select jsonb_build_object(
     'version', 1,
     'essai', p_devis.essai,
+    'type_mission', p_devis.type_mission,
     'emetteur', p_devis.instantane_emission -> 'emetteur',
     'gabarit', p_devis.instantane_emission ->> 'gabarit',
     'numero', p_devis.numero,
@@ -381,10 +410,12 @@ as $$
 $$;
 
 -- Cumul d'une mission : devis initial + avenants acceptés + l'avenant examiné ne peut pas être négatif.
+-- VOLATILE (et non STABLE) : appelée après le verrou du devis initial, elle doit voir les
+-- acceptations validées entre-temps par une autre transaction.
 create or replace function public.controle_cumul_avenants(p_initial uuid, p_avenant uuid, p_total_avenant numeric)
 returns text
 language plpgsql
-stable
+volatile
 security definer
 set search_path = public
 as $$
@@ -564,12 +595,12 @@ begin
      (new.id, new.prospect_id, new.numero, new.date_emission, new.total_ht, new.tva, new.total_ttc,
       new.regime_tva, new.territoire_tva, new.pays_tva, new.taux_tva, new.mention_tva, new.criteres_tva,
       new.instantane_emission, new.emis_par, new.emis_par_nom, new.emis_le,
-      new.remplace_devis_id, new.avenant_du_devis_id, new.created_at)
+      new.remplace_devis_id, new.avenant_du_devis_id, new.created_at, new.type_mission)
      is distinct from
      (old.id, old.prospect_id, old.numero, old.date_emission, old.total_ht, old.tva, old.total_ttc,
       old.regime_tva, old.territoire_tva, old.pays_tva, old.taux_tva, old.mention_tva, old.criteres_tva,
       old.instantane_emission, old.emis_par, old.emis_par_nom, old.emis_le,
-      old.remplace_devis_id, old.avenant_du_devis_id, old.created_at) then
+      old.remplace_devis_id, old.avenant_du_devis_id, old.created_at, old.type_mission) then
     raise exception 'Devis % (%) : contenu figé depuis l''émission', old.numero, old.statut;
   end if;
 
@@ -646,7 +677,7 @@ begin
     if new.instantane_emission is null or coalesce(new.instantane_emission ->> 'gabarit', '') = '' then
       raise exception 'Émission impossible : version du gabarit obligatoire';
     end if;
-    v_erreur := public.controle_emetteur(new.instantane_emission -> 'emetteur');
+    v_erreur := public.controle_emetteur(new.instantane_emission -> 'emetteur', new.type_mission);
     if v_erreur is not null then
       raise exception 'Émission impossible : %', v_erreur;
     end if;
@@ -675,6 +706,7 @@ begin
       if not exists (select 1 from public.projets where devis_id = v_source.id) then
         raise exception 'Le devis accepté n''a pas de projet : avenant impossible';
       end if;
+      perform 1 from public.devis where id = v_source.id for update;  -- sérialise les avenants d'une mission
       v_erreur := public.controle_cumul_avenants(v_source.id, new.id, new.total_ht);
       if v_erreur is not null then
         raise exception 'Émission impossible : %', v_erreur;
@@ -683,13 +715,19 @@ begin
       raise exception 'Émission impossible : seul un avenant peut avoir un total négatif';
     end if;
 
-    -- Numéro : compteur d'essai seulement pour un devis d'essai (indicateur non modifiable),
-    -- sinon compteur réel. Aucun champ commercial n'influe sur la séquence.
-    v_essai := new.essai;
+    -- Numéro. Devis d'essai (indicateur non modifiable) : compteur d'essai propre à ce module, dans
+    -- la table compteurs (annulé avec la transaction) — la fonction réelle n'est JAMAIS appelée par
+    -- un essai, ni par l'autotest de cette migration. Devis réel : prochain_numero.
+    -- Clé et préfixe du devis réel à confirmer après examen de la définition réelle de prochain_numero.
     v_annee := to_char(now() at time zone 'America/Martinique', 'YYYY');
-    new.numero := public.prochain_numero(
-      case when v_essai then 'essai_devis_' else 'devis_' end || v_annee,
-      case when v_essai then 'ESSAI-DEV' else 'DEV' end);
+    if new.essai then
+      insert into public.compteurs (cle, valeur) values ('essai_devis_' || v_annee, 1)
+      on conflict (cle) do update set valeur = public.compteurs.valeur + 1
+      returning valeur into v_nb;
+      new.numero := 'ESSAI-DEV-' || v_annee || '-' || lpad(v_nb::text, 4, '0');
+    else
+      new.numero := public.prochain_numero('devis_' || v_annee, 'DEV');
+    end if;
     new.date_emission := (now() at time zone 'America/Martinique')::date;
     new.emis_le := now();
     if new.emis_par is null then
@@ -719,6 +757,9 @@ begin
 
   if old.statut = 'envoye' and new.statut in ('accepte', 'refuse') then
     if new.statut = 'accepte' and new.avenant_du_devis_id is not null then
+      -- Verrou du devis initial : deux acceptations simultanées d'avenants de la même mission
+      -- s'attendent ; la seconde voit la première et le cumul est vérifié sur l'état réel.
+      perform 1 from public.devis where id = new.avenant_du_devis_id for update;
       v_erreur := public.controle_cumul_avenants(new.avenant_du_devis_id, new.id, new.total_ht);
       if v_erreur is not null then
         raise exception 'Acceptation impossible : %', v_erreur;
@@ -1048,9 +1089,9 @@ begin
     return v_id;  -- une nouvelle version existe déjà
   end if;
   insert into public.devis (prospect_id, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva,
-                            criteres_tva, remplace_devis_id)
+                            criteres_tva, type_mission, remplace_devis_id)
   values (v_source.prospect_id, v_source.regime_tva, v_source.territoire_tva, v_source.pays_tva,
-          v_source.taux_tva, v_source.mention_tva, v_source.criteres_tva, v_source.id)
+          v_source.taux_tva, v_source.mention_tva, v_source.criteres_tva, v_source.type_mission, v_source.id)
   returning id into v_id;
   insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire, created_at)
   select v_id, designation, quantite, prix_unitaire, created_at
@@ -1077,9 +1118,9 @@ begin
     raise exception 'Le devis accepté n''a pas de projet : avenant impossible';
   end if;
   insert into public.devis (prospect_id, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva,
-                            criteres_tva, avenant_du_devis_id)
+                            criteres_tva, type_mission, avenant_du_devis_id)
   values (v_source.prospect_id, v_source.regime_tva, v_source.territoire_tva, v_source.pays_tva,
-          v_source.taux_tva, v_source.mention_tva, v_source.criteres_tva, v_source.id)
+          v_source.taux_tva, v_source.mention_tva, v_source.criteres_tva, v_source.type_mission, v_source.id)
   returning id into v_id;
   return v_id;
 end
@@ -1117,7 +1158,7 @@ begin
     'emettre_devis(uuid, uuid, jsonb, text)', 'enregistrer_pdf_devis(uuid, text, text, bigint)',
     'signaler_echec_pdf_devis(uuid, text)', 'declarer_envoi_devis(uuid, uuid, timestamptz, text, text)',
     'decider_devis(uuid, uuid, text)', 'creer_nouvelle_version_devis(uuid, uuid)',
-    'creer_avenant_devis(uuid, uuid)', 'appel_utilisateur()', 'controle_emetteur(jsonb)',
+    'creer_avenant_devis(uuid, uuid)', 'appel_utilisateur()', 'controle_emetteur(jsonb, text)',
     'controle_destinataire(uuid)', 'controle_cumul_avenants(uuid, uuid, numeric)',
     'creer_prospect_essai(text, text, text, text, text, text)'] loop
     execute format('revoke all on function public.%s from public, anon, authenticated', v_fonction);
@@ -1162,9 +1203,9 @@ create policy "clients_suppression_admin" on public.clients for delete to authen
 
 -- 7b. Droits de colonnes : les champs gérés par la base ne sont jamais écrits par un jeton.
 revoke insert, update on public.devis from authenticated;
-grant insert (prospect_id, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva, criteres_tva)
+grant insert (prospect_id, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva, criteres_tva, type_mission)
   on public.devis to authenticated;
-grant update (prospect_id, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva, criteres_tva)
+grant update (prospect_id, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva, criteres_tva, type_mission)
   on public.devis to authenticated;
 revoke insert, update on public.devis_lignes from authenticated;
 grant insert (devis_id, designation, quantite, prix_unitaire) on public.devis_lignes to authenticated;
@@ -1190,7 +1231,7 @@ create view public.commercial_prospects with (security_barrier = true) as
 create view public.commercial_devis with (security_barrier = true) as
   select d.id, d.prospect_id, d.numero, d.date_emission, d.statut, d.total_ht, d.tva, d.total_ttc,
          d.regime_tva, d.territoire_tva, d.pays_tva, d.taux_tva, d.mention_tva, d.date_envoi, d.canal_envoi,
-         d.remplace_devis_id, d.avenant_du_devis_id, d.essai, d.created_at
+         d.remplace_devis_id, d.avenant_du_devis_id, d.essai, d.type_mission, d.created_at
     from public.devis d
    where (select public.mon_role()) in ('admin', 'manager', 'collaborateur');
 
@@ -1231,7 +1272,7 @@ declare
   v_emetteur constant jsonb := '{"raison_sociale":"AUTOTEST","forme_juridique":"SAS","capital_social":"1",
     "adresse":"1 rue de l''Essai","code_postal":"97200","ville":"Fort-de-France","siret":"00000000000000",
     "immatriculation":"RCS essai","tva_intracom":"FR00000000000","validite_jours":"30",
-    "assurance_assureur":"essai","assurance_contrat":"essai","assurance_couverture":"essai"}';
+    "obligation_assurance":"non_requise"}';
 begin
   -- Inventaire des fonctions exécutables avec un jeton : toujours les 4 fonctions d'identité.
   select string_agg(p.proname, ', ' order by p.proname) into v_liste
@@ -1316,7 +1357,7 @@ begin
     insert into public.devis (prospect_id) values (v_prospect) returning id into v_devis;
     insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire)
       values (v_devis, 'Étude', 3, 100.333), (v_devis, 'Visite', 1, 0);
-    update public.devis set regime_tva = 'taxable', territoire_tva = 'MQ', taux_tva = 8.5,
+    update public.devis set regime_tva = 'taxable', territoire_tva = 'MQ', taux_tva = 8.5, type_mission = 'conseil',
            criteres_tva = '{"nature_mission":"prestation_intellectuelle","statut_client":"assujetti_france"}'
      where id = v_devis;
     select total_ht = 301.00 and tva = 25.59 and total_ttc = 326.59 into v_ok from public.devis where id = v_devis;

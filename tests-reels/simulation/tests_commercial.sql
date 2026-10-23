@@ -31,7 +31,8 @@ create function essai.valeur(p_sql text) returns text language plpgsql as $$
 declare v text;
 begin execute p_sql into v; return v;
 exception when others then return 'ERREUR: ' || left(sqlerrm, 80); end $$;
-create function essai.emetteur() returns jsonb language sql as $$ select '{"raison_sociale":"SIMULATION SG Ingénierie","forme_juridique":"SAS","capital_social":"SIMULATION","adresse":"SIMULATION adresse","code_postal":"97200","ville":"Fort-de-France","siret":"00000000000000","immatriculation":"SIMULATION RCS","tva_intracom":"FR00000000000","validite_jours":"30","assurance_assureur":"SIMULATION","assurance_contrat":"SIMULATION","assurance_couverture":"SIMULATION"}'::jsonb $$;
+create function essai.emetteur() returns jsonb language sql as $$ select '{"raison_sociale":"SIMULATION SG Ingénierie","forme_juridique":"SAS","capital_social":"SIMULATION","adresse":"SIMULATION adresse","code_postal":"97200","ville":"Fort-de-France","siret":"00000000000000","immatriculation":"SIMULATION RCS","tva_intracom":"FR00000000000","validite_jours":"30","obligation_assurance":"non_requise"}'::jsonb $$;
+create function essai.emetteur_assure() returns jsonb language sql as $$ select essai.emetteur() || '{"obligation_assurance":"obligatoire","assurance_assureur":"SIMULATION","assurance_contrat":"SIMULATION","assurance_couverture":"SIMULATION"}'::jsonb $$;
 create function essai.emetteur_demo() returns jsonb language sql as $$ select essai.emetteur() || '{"raison_sociale":"[DÉMO] SG Ingénierie"}'::jsonb $$;
 grant execute on all functions in schema essai to authenticated, anon, service_role;
 
@@ -57,6 +58,8 @@ create function essai.qui(p_user uuid, p_session uuid) returns void language sql
     json_build_object('sub', p_user, 'role', 'authenticated', 'session_id', p_session)::text, false);
 $$;
 grant execute on function essai.qui(uuid, uuid) to authenticated, anon, service_role;
+
+alter table public.devis alter column type_mission set default 'conseil';
 
 -- ===================== MANAGER : saisie d'un prospect et d'un devis =====================
 select essai.qui('aaaaaaaa-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000002');
@@ -153,6 +156,24 @@ select essai.refus('émission avec coordonnées incomplètes refusée (liste des
      essai.emetteur() - 'siret' - 'assurance_contrat','v1')$q$);
 select essai.refus('coordonnées de démonstration [DÉMO] sur un devis réel : refusées',
   $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',essai.emetteur_demo(),'v1')$q$);
+select essai.refus('assurance non déterminée pour la mission (« a_confirmer ») : émission refusée',
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',
+     essai.emetteur() || '{"obligation_assurance":"a_confirmer"}','v1')$q$);
+reset role;
+update public.devis set type_mission = null where id = 'dddddddd-0000-0000-0000-000000000001';
+set role service_role;
+select essai.refus('type de mission non renseigné : émission refusée',
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',essai.emetteur(),'v1')$q$);
+reset role;
+update public.devis set type_mission = 'moex' where id = 'dddddddd-0000-0000-0000-000000000001';
+set role service_role;
+select essai.refus('MOEx sans assurance décennale déclarée obligatoire : émission refusée',
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',essai.emetteur(),'v1')$q$);
+select essai.refus('MOEx avec assurance obligatoire mais contrat manquant : émission refusée',
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',essai.emetteur_assure() - 'assurance_contrat','v1')$q$);
+reset role;
+update public.devis set type_mission = 'conseil' where id = 'dddddddd-0000-0000-0000-000000000001';
+set role service_role;
 select essai.refus('émission avec SIRET invalide refusée',
   $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',
      essai.emetteur() || '{"siret":"123"}','v1')$q$);

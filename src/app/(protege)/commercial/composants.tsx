@@ -15,6 +15,7 @@ import {
   type Regime,
   type Territoire,
 } from "@/lib/tva";
+import { TYPES_MISSION } from "@/lib/entreprise";
 
 export const champ = "mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm";
 export const bouton = "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50";
@@ -104,7 +105,7 @@ export function FormulaireProspect({ action, v, idProspect, libelle }: {
 
 export type ValeursTva = {
   regime_tva: string | null; territoire_tva: string | null; pays_tva: string | null; taux_tva: number | null;
-  mention_tva: string | null; criteres_tva: Criteres | null;
+  mention_tva: string | null; criteres_tva: Criteres | null; type_mission: string | null;
 };
 
 // Traitement fiscal : la PROPOSITION s'affiche à partir des critères ; elle n'est reprise que si
@@ -126,8 +127,13 @@ export function FormulaireTva({ action, devisId, v }: { action: Action; devisId:
   return (
     <form action={executer} className="rounded-lg border border-slate-200 bg-white p-4">
       <input type="hidden" name="devis_id" value={devisId} />
-      <p className="mb-3 text-sm font-semibold">1. Critères de décision</p>
+      <p className="mb-3 text-sm font-semibold">1. Mission et critères de décision</p>
       <div className="grid gap-3 sm:grid-cols-2">
+        <label className={`${l} sm:col-span-2`}>Type de mission * (détermine l&apos;assurance exigée)
+          <select name="type_mission" defaultValue={v.type_mission ?? ""} className={champ}>
+            <option value="">— choisir —</option>
+            {TYPES_MISSION.map((m) => <option key={m.valeur} value={m.valeur}>{m.libelle}</option>)}
+          </select></label>
         <label className={l}>Nature de la mission *
           <select name="nature_mission" value={criteres.nature_mission ?? ""} onChange={(e) => maj("nature_mission", e.target.value)} className={champ}>
             <option value="">— choisir —</option>

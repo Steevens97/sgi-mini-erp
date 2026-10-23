@@ -191,7 +191,11 @@ export async function genererPdfDevis(inst: InstantaneDevis, options: OptionsPdf
   const pied = [
     [e.raison_sociale, e.forme_juridique, e.capital_social ? `capital ${e.capital_social}` : null].filter(Boolean).join(" — "),
     [`Siège : ${e.adresse ?? ""} ${e.code_postal ?? ""} ${e.ville ?? ""}`, `SIRET ${e.siret ?? ""}`, e.immatriculation].join(" — "),
-    [`TVA intracom. ${e.tva_intracom ?? ""}`, `Assurance : ${e.assurance_assureur ?? ""}, contrat ${e.assurance_contrat ?? ""}, couverture ${e.assurance_couverture ?? ""}`].join(" — "),
+    [`TVA intracom. ${e.tva_intracom ?? ""}`,
+      // Assurance imprimée seulement si elle est obligatoire pour la mission (jamais inventée).
+      e.obligation_assurance === "obligatoire"
+        ? `Assurance : ${e.assurance_assureur ?? ""}, contrat ${e.assurance_contrat ?? ""}, couverture ${e.assurance_couverture ?? ""}`
+        : null].filter(Boolean).join(" — "),
   ];
   const pages = doc.getPages();
   pages.forEach((pg, i) => {

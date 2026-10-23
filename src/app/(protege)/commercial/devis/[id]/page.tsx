@@ -4,7 +4,7 @@ import { lireUtilisateurCourant } from "@/lib/session";
 import { creerClientServeur } from "@/lib/supabase/serveur";
 import { creerClientAdmin } from "@/lib/supabase/admin";
 import { libelleTraitement, type Criteres } from "@/lib/tva";
-import { coordonneesEmetteur, champsEmetteurManquants } from "@/lib/entreprise";
+import { TYPES_MISSION, blocagesEmission, type TypeMission } from "@/lib/entreprise";
 import { LIBELLES_CANAL, LIBELLES_STATUT_DEVIS, dateFr, euros } from "@/lib/format";
 import {
   ajouterLigne, creerAvenant, decider, declarerEnvoi, emettre, enregistrerTva, modifierLigne,
@@ -12,8 +12,8 @@ import {
 } from "../../actions";
 import { FormulaireAction, FormulaireTva, LigneEditable, champ } from "../../composants";
 
-const COLONNES_COMMERCIAL = "id, prospect_id, numero, date_emission, statut, total_ht, tva, total_ttc, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva, criteres_tva, date_envoi, canal_envoi, envoi_destinataire, envoi_declare_par_nom, emis_par_nom, decision_par_nom, decision_le, remplace_devis_id, avenant_du_devis_id, essai, pdf_statut, pdf_erreur, created_at";
-const COLONNES_CONSULTATION = "id, prospect_id, numero, date_emission, statut, total_ht, tva, total_ttc, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva, date_envoi, canal_envoi, remplace_devis_id, avenant_du_devis_id, essai, created_at";
+const COLONNES_COMMERCIAL = "id, prospect_id, numero, date_emission, statut, total_ht, tva, total_ttc, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva, criteres_tva, date_envoi, canal_envoi, envoi_destinataire, envoi_declare_par_nom, emis_par_nom, decision_par_nom, decision_le, remplace_devis_id, avenant_du_devis_id, essai, type_mission, pdf_statut, pdf_erreur, created_at";
+const COLONNES_CONSULTATION = "id, prospect_id, numero, date_emission, statut, total_ht, tva, total_ttc, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva, date_envoi, canal_envoi, remplace_devis_id, avenant_du_devis_id, essai, type_mission, created_at";
 
 type Devis = Record<string, string | number | boolean | null> & { criteres_tva?: Criteres | null };
 
@@ -43,7 +43,7 @@ export default async function PageDevis({ params }: { params: Promise<{ id: stri
   const brouillon = d.statut === "brouillon";
   const ecriture = commercial && !d.essai;
   const caches = { devis_id: id };
-  const manquants = d.essai ? [] : champsEmetteurManquants(coordonneesEmetteur());
+  const manquants = d.essai ? [] : blocagesEmission(d.type_mission as TypeMission | null);
 
   return (
     <div className="space-y-6">
@@ -57,7 +57,7 @@ export default async function PageDevis({ params }: { params: Promise<{ id: stri
           {d.essai ? <span className="rounded bg-red-100 px-2 text-base text-red-800">ESSAI — SANS VALEUR</span> : null}
         </h1>
         <p className="text-sm text-slate-600">
-          {libelleTraitement(d.regime_tva as string, d.territoire_tva as string, d.pays_tva as string, d.taux_tva === null ? null : Number(d.taux_tva))}
+          Mission : {TYPES_MISSION.find((m) => m.valeur === d.type_mission)?.libelle ?? "non renseignée"} — {libelleTraitement(d.regime_tva as string, d.territoire_tva as string, d.pays_tva as string, d.taux_tva === null ? null : Number(d.taux_tva))}
           {d.date_emission && !brouillon ? ` — émis le ${dateFr(String(d.date_emission))}` : ""}
           {d.emis_par_nom ? ` par ${d.emis_par_nom}` : ""}
         </p>
@@ -116,7 +116,8 @@ export default async function PageDevis({ params }: { params: Promise<{ id: stri
         <FormulaireTva action={enregistrerTva} devisId={id} v={{
           regime_tva: d.regime_tva as string | null, territoire_tva: d.territoire_tva as string | null,
           pays_tva: d.pays_tva as string | null, taux_tva: d.taux_tva === null ? null : Number(d.taux_tva),
-          mention_tva: d.mention_tva as string | null, criteres_tva: d.criteres_tva ?? null }} />
+          mention_tva: d.mention_tva as string | null, criteres_tva: d.criteres_tva ?? null,
+          type_mission: d.type_mission as string | null }} />
       )}
 
       {commercial && (
@@ -128,7 +129,7 @@ export default async function PageDevis({ params }: { params: Promise<{ id: stri
               {ecriture && (
                 <>
                   {manquants.length > 0 ? (
-                    <p className="text-sm text-amber-800">Émission bloquée : coordonnées de SG Ingénierie à compléter ({manquants.join(", ")}).</p>
+                    <div className="text-sm text-amber-800"><p className="font-medium">Émission bloquée :</p><ul className="list-disc pl-5">{manquants.map((m) => <li key={m}>{m}</li>)}</ul></div>
                   ) : (
                     <FormulaireAction action={emettre} caches={caches} libelle="Émettre (attribue le numéro, fige le devis)" principal
                       confirmation="Émettre ce devis ? Il recevra son numéro définitif et ne sera plus modifiable." />

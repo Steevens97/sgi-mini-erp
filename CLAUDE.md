@@ -104,6 +104,42 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 - Tests : `tests-reels/tests_verrouillage.py` + `instantane.py` (empreinte des données) à relancer après
   chaque module.
 
+## Module Commercial (migration 20261024100000) — PRÉPARÉ sur la branche `preparation-commercial`, NON DÉPLOYÉ
+- Ne jamais fusionner dans `main` sans l'accord explicite de l'utilisateur (fusion = déploiement).
+- Prérequis au déploiement : définition RÉELLE de `prochain_numero` examinée (clé, préfixe, format,
+  caractère transactionnel). Le contrôle textuel de la migration ne prouve rien (voir
+  tests-reels/simulation/test_numerotation_piegee.sh). Ne lancer AUCUN test susceptible d'appeler
+  `prochain_numero` en production avant cet examen : un échec ne remet pas une séquence à zéro.
+- Statuts du devis : brouillon → emis → envoye → accepte | refuse ; emis|envoye → remplace (à l'émission
+  de la nouvelle version) ; un devis accepté ne se remplace pas : avenant. Tout est imposé par
+  déclencheurs (aussi depuis le tableau de bord). Numéro, statut, totaux, instantané : écrits par la base.
+- Numérotation : à l'émission seulement ; devis réel → `prochain_numero` ; devis d'ESSAI → compteur
+  `essai_devis_AAAA` de la table compteurs, JAMAIS `prochain_numero` (l'autotest de la migration non plus).
+- Essais : indicateur `essai` (prospects, devis) posé uniquement par `creer_prospect_essai` (clé secrète),
+  non modifiable ; l'email ne joue aucun rôle. Clients/projets d'essai préfixés [ESSAI], PDF « ESSAI — SANS VALEUR ».
+- Destinataire : `prospects.adresse, code_postal, ville, pays` (validé par l'utilisateur) obligatoires à
+  l'émission, figés dans `instantane_emission`.
+- Émetteur : `src/lib/entreprise.ts` (COORDONNEES_SG_INGENIERIE, VIDES tant que l'utilisateur ne les a pas
+  fournies) ; `controle_emetteur` bloque en base ; coordonnées [DÉMO] interdites sur un devis réel ;
+  coordonnées « SIMULATION LOCALE » seulement si l'URL Supabase est 127.0.0.1 et SIMULATION_LOCALE=1.
+- Type de mission (`devis.type_mission` : conseil, amo, moex, opc, donnees, drone, autre — colonne à
+  faire valider) ; assurance exigée selon OBLIGATIONS_ASSURANCE (à valider avec l'assureur ;
+  « a_confirmer » bloque) ; MOEx = décennale obligatoire, imposée en base. Rien d'inventé.
+- TVA : 6 champs (devis, factures), `controle_traitement_tva` par déclencheur ; proposition affichée,
+  jamais appliquée seule ; taux réduit/personnalisé = justification ; mentions sourcées seulement
+  (« Autoliquidation », « TVA non applicable – art. 294 du CGI »), le reste saisi par l'utilisateur.
+- Avenants : lignes négatives permises ; cumul mission (initial + avenants acceptés) >= 0, vérifié à
+  l'émission et à l'acceptation APRÈS verrou du devis initial (prouvé : sans verrou, -400 €).
+- PDF : pdf-lib, gabarit `devis-v1` jamais modifié ; généré depuis l'instantané ; archivé une fois dans le
+  bucket privé `devis` (clé secrète) ; le fichier stocké fait foi (reprise, concurrence) ; téléchargement
+  vérifié par SHA-256 ; brouillon généré à la volée, jamais stocké. Le collaborateur n'a pas accès aux PDF.
+- Droits : admin/manager sur prospects, devis, lignes (droits de colonnes) ; clients lecture admin/manager,
+  écriture admin ; collaborateur via vues `commercial_prospects|devis|devis_lignes` (colonnes explicites).
+- Tests (base d'ESSAI locale, jamais Supabase) : `tests-reels/simulation/rejouer.sh tests_commercial.sql`
+  (112), `tests_concurrence.sh` (17), `postgrest_local.sh start` + `tests_vues_api.py` (30),
+  `test_numerotation_piegee.sh`, `node --experimental-strip-types tests-reels/tests_pdf_archivage.mts` (14),
+  navigateur : `pile_locale.sh start`, build avec l'URL 127.0.0.1:54321, `navigateur_commercial.mjs` (25 + 3).
+
 ## Pièges
 - Compte sans `collaborateur_id` = ne voit rien, sans erreur → afficher un avertissement VISIBLE.
 - `SUPABASE_SERVICE_ROLE_KEY` est SECRÈTE : jamais de préfixe `NEXT_PUBLIC_`, jamais commitée,
@@ -143,7 +179,13 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Tests : 44/44 écran (local + en ligne), 42/42 RLS. Reste : l'utilisateur crée sa fiche, puis un manager
   et un collaborateur, et se reconnecte en collaborateur.
 
+- Module Commercial : PRÉPARÉ (branche `preparation-commercial`), non déployé — voir la section dédiée.
+
 ## Tests locaux dans le conteneur cloud
+- Base d'essai PostgreSQL 16 : `/var/tmp/pg-essai` (port 5499), démarrage :
+  `su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D /var/tmp/pg-essai/data -o '-p 5499 -k /var/tmp/pg-essai -c listen_addresses=' -l /var/tmp/pg-essai/log start"`.
+- Ne jamais arrêter un processus par son nom (pkill/pgrep) : la commande se tue elle-même ; utiliser les
+  scripts `*_local.sh` (fichiers pid).
 - Le serveur Node doit passer par le proxy : lancer avec
   `NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt npx next start -p 3100`.
 - Navigateur : Playwright avec `executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"`.

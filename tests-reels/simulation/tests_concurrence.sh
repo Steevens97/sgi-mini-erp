@@ -72,3 +72,25 @@ sleep 0.5
 q -c "begin; update public.devis set statut='accepte' where id='dddddddd-0000-0000-0000-0000000000c4'; commit;" &
 wait
 ok "un seul projet pour ce devis" "$(q -c "select count(*) from public.projets where devis_id = 'dddddddd-0000-0000-0000-0000000000c4'")" "1"
+
+echo "Cas G : deux avenants négatifs d'une même mission acceptés en même temps"
+# Mission c4 : 1000 € HT acceptée. Deux avenants de -700 € HT chacun : chacun seul laisse 300 €,
+# ensemble ils rendraient la mission négative (-400 €).
+for n in 1 2; do
+  AV=$(q -c "select public.creer_avenant_devis('dddddddd-0000-0000-0000-0000000000c4','$A')")
+  echo "$AV" > /tmp/av$n
+  q -c "insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire) values ('$AV', 'Réduction $n', -1, 700)"
+  q -c "select public.emettre_devis('$AV','$A',essai.emetteur(),'v1')" >/dev/null
+  q -c "insert into storage.objects (bucket_id, name, metadata) select 'devis', id || '/' || numero || '.pdf', '{\"size\": 10}' from public.devis where id='$AV'"
+  q -c "select public.enregistrer_pdf_devis(id, id || '/' || numero || '.pdf', repeat('a',64), 10) from public.devis where id='$AV'" >/dev/null
+  q -c "select public.declarer_envoi_devis('$AV','$A',now(),'email',null)" >/dev/null
+done
+AV1=$(cat /tmp/av1); AV2=$(cat /tmp/av2)
+q -c "begin; select public.decider_devis('$AV1','$A','accepte'); select pg_sleep(2); commit;" >/dev/null 2>/tmp/g1 &
+sleep 0.5
+q -c "select public.decider_devis('$AV2','$A','accepte');" >/dev/null 2>/tmp/g2 &
+wait
+ok "un seul des deux avenants accepté" "$(q -c "select count(*) from public.devis where id in ('$AV1','$AV2') and statut = 'accepte'")" "1"
+ok "le second refusé : la mission deviendrait négative" "$(grep -c 'deviendrait négatif' /tmp/g2)" "1"
+ok "montant de la mission resté positif (1000 - 700 = 300 € HT)" "$(q -c "select d.total_ht + coalesce((select sum(a.total_ht) from public.devis a where a.avenant_du_devis_id = d.id and a.statut = 'accepte'), 0) from public.devis d where d.id = 'dddddddd-0000-0000-0000-0000000000c4'")" "300.00"
+ok "toujours un seul projet pour la mission" "$(q -c "select count(*) from public.projets where devis_id = 'dddddddd-0000-0000-0000-0000000000c4'")" "1"

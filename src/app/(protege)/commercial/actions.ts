@@ -8,9 +8,11 @@ import { creerClientAdmin } from "@/lib/supabase/admin";
 import { archiverDevis } from "@/lib/devis/serveur";
 import {
   COORDONNEES_DEMO,
-  coordonneesEmetteur,
   GABARIT_DEVIS,
-  champsEmetteurManquants,
+  TYPES_MISSION,
+  blocagesEmission,
+  emetteurPourMission,
+  type TypeMission,
 } from "@/lib/entreprise";
 import type { EtatAction } from "@/lib/utilisateurs";
 
@@ -89,6 +91,8 @@ export async function enregistrerTva(_e: EtatAction, d: FormData): Promise<EtatA
   await exigerCommercial();
   const id = String(d.get("devis_id") ?? "");
   const regime = texte(d, "regime_tva");
+  const typeMission = texte(d, "type_mission");
+  if (typeMission && !TYPES_MISSION.some((m) => m.valeur === typeMission)) return erreur("Type de mission inconnu.");
   const territoire = texte(d, "territoire_tva");
   const tauxSaisi = texte(d, "taux_tva");
   const taux = regime === "taxable" && tauxSaisi ? Number(tauxSaisi.replace(",", ".")) : null;
@@ -108,6 +112,7 @@ export async function enregistrerTva(_e: EtatAction, d: FormData): Promise<EtatA
       taux_tva: taux,
       mention_tva: texte(d, "mention_tva"),
       criteres_tva: regime ? criteres : null,
+      type_mission: typeMission,
     })
     .eq("id", id)
     .select("id");
@@ -192,14 +197,15 @@ export async function emettre(_e: EtatAction, d: FormData): Promise<EtatAction> 
   const moi = await exigerCommercial();
   const id = String(d.get("devis_id") ?? "");
   const admin = creerClientAdmin();
-  const { data: devis } = await admin.from("devis").select("essai").eq("id", id).maybeSingle();
+  const { data: devis } = await admin.from("devis").select("essai, type_mission").eq("id", id).maybeSingle();
   if (!devis) return erreur("Devis introuvable.");
-  // Devis réel : coordonnées réelles complètes obligatoires (la base le revérifie).
-  const emetteur = devis.essai ? COORDONNEES_DEMO : coordonneesEmetteur();
-  const manquants = champsEmetteurManquants(emetteur);
-  if (manquants.length) {
-    return erreur(`Émission bloquée : coordonnées de SG Ingénierie à compléter (${manquants.join(", ")}).`);
-  }
+  // Devis réel : coordonnées réelles complètes et assurance selon la mission (la base le revérifie).
+  const type = devis.type_mission as TypeMission | null;
+  const blocages = devis.essai ? [] : blocagesEmission(type);
+  if (blocages.length) return erreur(`Émission bloquée : ${blocages.join(" ; ")}.`);
+  const emetteur = devis.essai
+    ? { ...COORDONNEES_DEMO, obligation_assurance: "non_requise" }
+    : emetteurPourMission(type as TypeMission);
   const { data: numero, error } = await admin.rpc("emettre_devis", {
     p_devis_id: id, p_auteur: moi.id, p_emetteur: emetteur, p_gabarit: GABARIT_DEVIS,
   });

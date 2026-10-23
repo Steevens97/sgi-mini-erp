@@ -22,10 +22,11 @@ for f in "$R"/supabase/migrations/2026102[23]*.sql; do
   q -c "insert into supabase_migrations.schema_migrations values ('$(basename "$f" | cut -d_ -f1)')"
 done
 echo "Séquence piégée avant : $(q -c "select coalesce(last_value, 0) from pg_sequences where sequencename='piege_seq'")"
-if q -v ON_ERROR_STOP=1 -1 -f "$R/supabase/migrations/20261024100000_commercial_devis.sql" >/dev/null 2>/tmp/piege.err; then
-  echo "  [ÉCHEC] la migration s'est appliquée malgré une numérotation non transactionnelle"
-else
-  echo "  [OK ] migration refusée : $(grep -o 'Commercial :.*' /tmp/piege.err | head -1)"
-fi
-echo "Séquence piégée après (non annulable) : $(q -c "select coalesce(last_value, 0) from pg_sequences where sequencename='piege_seq'")"
-echo "Colonnes ajoutées malgré l'échec ? $(q -c "select count(*) from information_schema.columns where table_name='devis' and column_name='regime_tva'") (0 = rien appliqué)"
+# La migration n'appelle PAS prochain_numero (l'autotest utilise le compteur d'essai) : elle ne doit
+# donc faire avancer AUCUNE séquence, même si prochain_numero en utilise une en cachette.
+q -v ON_ERROR_STOP=1 -1 -f "$R/supabase/migrations/20261024100000_commercial_devis.sql" >/dev/null 2>/tmp/piege.err \
+  && echo "  migration appliquée (le contrôle textuel ne détecte pas le piège : seul l'examen de la définition réelle le peut)" \
+  || echo "  migration refusée : $(grep -o 'Commercial :.*' /tmp/piege.err | head -1)"
+A=$(q -c "select coalesce(last_value, 0) from pg_sequences where sequencename='piege_seq'")
+[ "$A" = "0" ] && echo "  [OK ] séquence intacte après la migration et son autotest ($A) : prochain_numero n'a pas été appelé" \
+               || echo "  [ÉCHEC] la séquence a avancé ($A) : la migration a appelé prochain_numero"
