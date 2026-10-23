@@ -505,6 +505,54 @@ set role authenticated;
 select essai.refus('attribuer_numero non appelable avec un jeton', $q$select public.attribuer_numero('devis','DEV')$q$);
 reset role;
 
+-- ===================== Nettoyage des essais =====================
+create table essai.avant_nettoyage as
+  select (select count(*) from public.devis where not essai) as devis_reels,
+         (select count(*) from public.devis_lignes l join public.devis d on d.id = l.devis_id where not d.essai) as lignes_reelles,
+         (select count(*) from public.prospects where not essai) as prospects_reels,
+         (select count(*) from public.clients where nom not like '[ESSAI]%') as clients_reels,
+         (select count(*) from public.projets where nom not like '[ESSAI]%') as projets_reels,
+         (select string_agg(cle || '=' || valeur, ',' order by cle) from public.compteurs where cle !~ '^essai_') as compteurs_reels;
+select essai.qui('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001');
+set role authenticated;
+select essai.refus('nettoyage des essais non appelable avec un jeton (même admin)', $q$select public.supprimer_essais_commercial()$q$);
+select essai.refus('devis d''essai émis : suppression refusée avec un jeton',
+  $q$delete from public.devis where essai and statut <> 'brouillon'$q$);
+reset role;
+set role service_role;
+select essai.refus('devis réel émis : suppression refusée même avec la clé secrète',
+  $q$delete from public.devis where not essai and statut <> 'brouillon'$q$);
+reset role;
+-- Un projet d'essai sur lequel du temps réel a été saisi : le nettoyage refuse tout.
+insert into public.projets (id, nom, devis_id) select 'eeeeeeee-0000-0000-0000-0000000000e1', '[ESSAI] Projet témoin', id
+  from public.devis where essai and not exists (select 1 from public.projets p where p.devis_id = devis.id) limit 1;
+insert into public.temps (id, collaborateur_id, projet_id, heures)
+  values ('eeeeeeee-0000-0000-0000-0000000000e2', '22222222-2222-2222-2222-222222222221', 'eeeeeeee-0000-0000-0000-0000000000e1', 1);
+set role service_role;
+select essai.refus('nettoyage refusé si du temps est saisi sur un projet d''essai', $q$select public.supprimer_essais_commercial()$q$);
+reset role;
+select essai.ok('après ce refus : essais toujours présents (rien supprimé)',
+  (select count(*) > 0 from public.devis where essai) and (select count(*) = 1 from public.temps where id = 'eeeeeeee-0000-0000-0000-0000000000e2'));
+delete from public.temps where id = 'eeeeeeee-0000-0000-0000-0000000000e2';
+set role service_role;
+select essai.ok('nettoyage des essais avec la clé secrète', (select (public.supprimer_essais_commercial() ->> 'devis')::int > 0));
+reset role;
+select essai.ok('plus aucun prospect, devis, ligne, projet, client ni compteur d''essai',
+  not exists (select 1 from public.prospects where essai) and not exists (select 1 from public.devis where essai)
+  and not exists (select 1 from public.devis_lignes l where not exists (select 1 from public.devis d where d.id = l.devis_id))
+  and not exists (select 1 from public.projets where nom like '[ESSAI]%')
+  and not exists (select 1 from public.clients where nom like '[ESSAI]%')
+  and not exists (select 1 from public.compteurs where cle ~ '^essai_'));
+select essai.ok('données réelles et compteur réel inchangés par le nettoyage',
+  (select (devis_reels, lignes_reelles, prospects_reels, clients_reels, projets_reels, compteurs_reels) =
+          ((select count(*) from public.devis where not essai),
+           (select count(*) from public.devis_lignes l join public.devis d on d.id = l.devis_id where not d.essai),
+           (select count(*) from public.prospects where not essai),
+           (select count(*) from public.clients where nom not like '[ESSAI]%'),
+           (select count(*) from public.projets where nom not like '[ESSAI]%'),
+           (select string_agg(cle || '=' || valeur, ',' order by cle) from public.compteurs where cle !~ '^essai_'))
+     from essai.avant_nettoyage));
+
 -- ===================== Données existantes =====================
 select essai.ok('prospect de démonstration « gagné » sans devis : inchangé',
   (select statut = 'gagne' from public.prospects where nom = 'Prospect démo 2'));

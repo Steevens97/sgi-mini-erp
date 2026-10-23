@@ -876,6 +876,10 @@ security definer
 set search_path = public
 as $$
 begin
+  -- Exception unique : nettoyage des devis d'ESSAI par la clé secrète (supprimer_essais_commercial).
+  if old.essai and not public.appel_utilisateur() then
+    return old;
+  end if;
   if old.statut <> 'brouillon' then
     raise exception 'Seul un brouillon peut être supprimé (devis % : %)', old.numero, old.statut;
   end if;
@@ -1176,6 +1180,55 @@ begin
 end
 $$;
 
+-- Nettoyage des essais autorisés (clé secrète) : prospects, devis (tous statuts), lignes, projets et
+-- clients d'ESSAI, compteur essai_devis. Refuse tout si une donnée réelle y est rattachée.
+-- Renvoie les chemins des PDF d'essai archivés, à supprimer du bucket « devis » par l'appelant.
+create or replace function public.supprimer_essais_commercial()
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_prospects uuid[];
+  v_devis uuid[];
+  v_chemins text[];
+  v_projets uuid[];
+  v_clients uuid[];
+  v_nb_lignes integer;
+  v_nb_compteurs integer;
+begin
+  if public.appel_utilisateur() then
+    raise exception 'Réservé aux essais autorisés (clé secrète)';
+  end if;
+  select coalesce(array_agg(id), '{}') into v_prospects from public.prospects where essai;
+  select coalesce(array_agg(id), '{}'), coalesce(array_agg(pdf_chemin) filter (where pdf_chemin is not null), '{}')
+    into v_devis, v_chemins from public.devis where essai;
+  select coalesce(array_agg(id), '{}') into v_projets from public.projets where devis_id = any(v_devis);
+  select coalesce(array_agg(distinct client_id), '{}') into v_clients
+    from public.prospects where id = any(v_prospects) and client_id is not null;
+  if exists (select 1 from public.devis where not essai
+              and (remplace_devis_id = any(v_devis) or avenant_du_devis_id = any(v_devis)))
+     or exists (select 1 from public.projets where id = any(v_projets) and nom not like '[ESSAI]%')
+     or exists (select 1 from public.temps where projet_id = any(v_projets))
+     or exists (select 1 from public.clients where id = any(v_clients) and nom not like '[ESSAI]%')
+     or exists (select 1 from public.factures where client_id = any(v_clients))
+     or exists (select 1 from public.projets where client_id = any(v_clients) and not (id = any(v_projets)))
+     or exists (select 1 from public.prospects where client_id = any(v_clients) and not essai) then
+    raise exception 'Nettoyage refusé : une donnée réelle est rattachée à un essai ; rien n''a été supprimé';
+  end if;
+  select count(*) into v_nb_lignes from public.devis_lignes where devis_id = any(v_devis);
+  delete from public.projets where id = any(v_projets);
+  delete from public.devis where id = any(v_devis);
+  delete from public.prospects where id = any(v_prospects);
+  delete from public.clients where id = any(v_clients);
+  delete from public.compteurs where cle ~ '^essai_devis_[0-9]{4}$';
+  get diagnostics v_nb_compteurs = row_count;
+  return jsonb_build_object('prospects', cardinality(v_prospects), 'devis', cardinality(v_devis),
+    'lignes', v_nb_lignes, 'projets', cardinality(v_projets), 'clients', cardinality(v_clients),
+    'compteurs', v_nb_compteurs, 'pdf_chemins', to_jsonb(v_chemins));
+end
+$$;
+
 -- Aucune de ces fonctions n'est appelable avec un jeton utilisateur.
 do $$
 declare
@@ -1189,7 +1242,7 @@ begin
     'decider_devis(uuid, uuid, text)', 'creer_nouvelle_version_devis(uuid, uuid)',
     'creer_avenant_devis(uuid, uuid)', 'appel_utilisateur()', 'controle_emetteur(jsonb, text)', 'attribuer_numero(text, text)',
     'controle_destinataire(uuid)', 'controle_cumul_avenants(uuid, uuid, numeric)',
-    'creer_prospect_essai(text, text, text, text, text, text)'] loop
+    'creer_prospect_essai(text, text, text, text, text, text)', 'supprimer_essais_commercial()'] loop
     execute format('revoke all on function public.%s from public, anon, authenticated', v_fonction);
     execute format('grant execute on function public.%s to service_role', v_fonction);
   end loop;
@@ -1449,6 +1502,13 @@ begin
     exception when others then
       if sqlerrm like 'AUTOTEST:%' then raise; end if;
     end;
+    -- Nettoyage des essais : tout disparaît (devis accepté compris), rien de réel n'est touché.
+    perform public.supprimer_essais_commercial();
+    if exists (select 1 from public.prospects where essai) or exists (select 1 from public.devis where essai)
+       or exists (select 1 from public.projets where devis_id = v_devis)
+       or exists (select 1 from public.compteurs where cle ~ '^essai_devis_') then
+      raise exception 'AUTOTEST: nettoyage des essais incomplet';
+    end if;
     raise exception 'AUTOTEST_TERMINE';
   exception when others then
     if sqlerrm <> 'AUTOTEST_TERMINE' then

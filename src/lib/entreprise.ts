@@ -137,6 +137,10 @@ export const TYPES_MISSION: { valeur: TypeMission; libelle: string }[] = [
   { valeur: "autre", libelle: "Autre" },
 ];
 
+// Texte affiché à l'écran pour toute mission : l'étiquette de mission ne vaut jamais validation de
+// l'assurance (seuls la mission réelle et le contrat d'assurance font foi).
+export const MENTION_ASSURANCE = "couverture à vérifier selon la mission et le contrat";
+
 // À VALIDER par l'utilisateur avec son assureur. « a_confirmer » BLOQUE l'émission pour la mission.
 // MOEx : assurance décennale obligatoire (C. assur. L241-1 ; C. civ. 1792-1) — imposé aussi en base.
 // Les autres missions dépendent de leur contenu exact : aucune obligation n'est supposée ici.
@@ -165,11 +169,13 @@ export function blocagesEmission(type: TypeMission | null): string[] {
   const blocages = champsEmetteurManquants(c).map((x) => `coordonnées : ${x}`);
   if (!type) return [...blocages, "type de mission non renseigné"];
   const obligation = (enSimulation() ? OBLIGATIONS_SIMULATION : OBLIGATIONS_ASSURANCE)[type];
-  if (obligation === "a_confirmer") blocages.push("obligation d'assurance à confirmer pour ce type de mission");
+  if (obligation === "a_confirmer") {
+    blocages.push(`assurance : ${MENTION_ASSURANCE} (obligation non confirmée par l'assureur)`);
+  }
   if (obligation === "obligatoire") {
     for (const [cle, libelle] of [["assurance_assureur", "assureur"], ["assurance_contrat", "n° de contrat"],
       ["assurance_couverture", "couverture géographique"]] as const) {
-      if (!c[cle].trim()) blocages.push(`assurance obligatoire : ${libelle}`);
+      if (!c[cle].trim()) blocages.push(`assurance : ${MENTION_ASSURANCE} — ${libelle} non renseigné`);
     }
   }
   return blocages;

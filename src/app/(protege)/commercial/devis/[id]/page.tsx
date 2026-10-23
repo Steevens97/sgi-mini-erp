@@ -4,7 +4,7 @@ import { lireUtilisateurCourant } from "@/lib/session";
 import { creerClientServeur } from "@/lib/supabase/serveur";
 import { creerClientAdmin } from "@/lib/supabase/admin";
 import { libelleTraitement, type Criteres } from "@/lib/tva";
-import { TYPES_MISSION, blocagesEmission, type TypeMission } from "@/lib/entreprise";
+import { MENTION_ASSURANCE, TYPES_MISSION, blocagesEmission, type TypeMission } from "@/lib/entreprise";
 import { LIBELLES_CANAL, LIBELLES_STATUT_DEVIS, dateFr, euros } from "@/lib/format";
 import {
   ajouterLigne, creerAvenant, decider, declarerEnvoi, emettre, enregistrerTva, modifierLigne,
@@ -61,6 +61,7 @@ export default async function PageDevis({ params }: { params: Promise<{ id: stri
           {d.date_emission && !brouillon ? ` — émis le ${dateFr(String(d.date_emission))}` : ""}
           {d.emis_par_nom ? ` par ${d.emis_par_nom}` : ""}
         </p>
+        <p className="text-sm text-amber-800">Assurance : {MENTION_ASSURANCE}.</p>
         {autres.length > 0 && (
           <ul className="mt-2 text-sm">
             {autres.map((x) => (

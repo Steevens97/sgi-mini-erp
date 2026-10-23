@@ -63,7 +63,9 @@ try {
     await m.goto(B + `/commercial/devis/${id}`);
     verifier("brouillon : aucun bouton « Émettre »", (await m.locator("text=Émettre (attribue").count()) === 0);
     verifier("brouillon : blocages listés (coordonnées, assurance à confirmer)",
-      (await m.locator("text=coordonnées : Raison sociale").count()) === 1 && (await m.locator("text=obligation d'assurance à confirmer").count()) === 1);
+      (await m.locator("text=coordonnées : Raison sociale").count()) === 1 && (await m.locator("text=assurance : couverture à vérifier selon la mission et le contrat (obligation non confirmée par l'assureur)").count()) === 1);
+    verifier("brouillon : « Assurance : couverture à vérifier selon la mission et le contrat. » affiché",
+      (await m.locator("text=Assurance : couverture à vérifier selon la mission et le contrat.").count()) >= 1);
     throw new Error("FIN");
   }
 

@@ -139,6 +139,11 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   déclencheurs (aussi depuis le tableau de bord). Numéro, statut, totaux, instantané : écrits par la base.
 - Essais : indicateur `essai` (prospects, devis) posé uniquement par `creer_prospect_essai` (clé secrète),
   non modifiable ; l'email ne joue aucun rôle. Clients/projets d'essai préfixés [ESSAI], PDF « ESSAI — SANS VALEUR ».
+  Un devis d'essai n'est modifiable qu'avec la clé secrète (à l'écran : lecture seule, sauf « Régénérer le PDF »).
+- Nettoyage : `supprimer_essais_commercial()` (clé secrète) supprime prospects, devis (tous statuts), lignes,
+  projets et clients d'ESSAI et le compteur essai_devis ; refuse tout si une donnée réelle y est rattachée
+  (temps saisi, facture, devis réel lié…) ; renvoie `pdf_chemins` à supprimer du bucket `devis`.
+  Seule exception à « un devis émis ne se supprime pas » : devis d'essai, clé secrète.
 - Destinataire : `prospects.adresse, code_postal, ville, pays` obligatoires à l'émission, figés dans
   `instantane_emission`.
 - Émetteur : `src/lib/entreprise.ts` (COORDONNEES_SG_INGENIERIE, VIDES tant que l'utilisateur ne les a pas
@@ -146,6 +151,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   coordonnées « SIMULATION LOCALE » seulement si l'URL Supabase est 127.0.0.1 et SIMULATION_LOCALE=1.
 - Assurance exigée selon OBLIGATIONS_ASSURANCE (à fournir par l'utilisateur/l'assureur ; « a_confirmer »
   bloque l'émission) ; MOEx = décennale obligatoire, imposée en base. Aucune couverture inventée.
+  À l'écran (formulaire et fiche devis) : « Assurance : couverture à vérifier selon la mission et le contrat. »
+  (MENTION_ASSURANCE) — l'étiquette de mission n'est jamais présentée comme une validation.
 - TVA : 6 champs (devis, factures), `controle_traitement_tva` par déclencheur ; proposition affichée,
   jamais appliquée seule ; taux réduit/personnalisé = justification ; mentions sourcées seulement
   (« Autoliquidation », « TVA non applicable – art. 294 du CGI »), le reste saisi par l'utilisateur.
@@ -166,7 +173,10 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 - `postgrest_local.sh start` + `python3 -I tests_vues_api.py` : 30/30 (puis `postgrest_local.sh stop`).
 - `node --experimental-strip-types tests-reels/tests_pdf_archivage.mts` : 14/14.
 - Navigateur : `pile_locale.sh start`, build avec l'URL 127.0.0.1:54321, `navigateur_commercial.mjs`
-  (modes simulation 25/25, limite 2/2, reel 3/3).
+  (modes simulation 25/25, limite 2/2, reel 4/4 — le mode reel exige un brouillon réel « conseil »).
+- Production (après déploiement) : `tests_verrouillage.py` détecte le module (migrations_appliquees) et
+  vérifie les droits Commercial en plus des contrôles d'origine ; `parcours_essai_commercial.mjs <url>`
+  (Playwright, depuis scratchpad/essais) : parcours complet avec données d'essai, nettoyage intégré.
 
 ## Pièges
 - Compte sans `collaborateur_id` = ne voit rien, sans erreur → afficher un avertissement VISIBLE.
