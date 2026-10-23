@@ -106,6 +106,16 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 
 ## Module Commercial (migration 20261024100000) — PRÉPARÉ sur la branche `preparation-commercial`, NON DÉPLOYÉ
 - Ne jamais fusionner dans `main` sans l'accord explicite de l'utilisateur (fusion = déploiement).
+- Incident du 23/10/2026 : 1re tentative (fusion 92ba664) refusée par l'autotest (« totaux du brouillon
+  incorrects ») → rien appliqué en base ; le code était pourtant publié sur Vercel. Annulé par le commit
+  29c13b6 (git revert, historique conservé ; contenu = d1876d4). Vérifié : 44/44 écran Utilisateurs,
+  135/135 verrouillage, données identiques. Cause recherchée avec `tests-reels/diagnostic_totaux_devis.sql`
+  (lecture seule, exécutée par l'utilisateur dans le SQL Editor ; jamais de diagnostic publié sur GitHub).
+- ORDRE DE DÉPLOIEMENT : 1) commit sur `main` contenant UNIQUEMENT la migration (le code en ligne reste
+  compatible) ; 2) attendre « Supabase Preview » vert ET la version dans migrations_appliquees() ;
+  3) seulement ensuite publier le code qui en dépend. Comme 92ba664 a été annulé, la nouvelle tentative
+  passe par de nouveaux commits (pas de nouvelle fusion de l'ancienne branche telle quelle).
+- Ne jamais supprimer un déclencheur existant sur une hypothèse ; ne jamais affaiblir l'autotest des totaux.
 
 ### Arbitrages DÉFINITIFS de l'utilisateur (23/10/2026) — ne plus les redemander
 - `devis.type_mission` approuvé (conseil, amo, moex, opc, donnees, drone, autre).
