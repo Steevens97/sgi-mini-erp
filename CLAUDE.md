@@ -78,11 +78,31 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   remplace cette règle par les siennes (balayage pg_policies), sans jamais revenir à `true`.
 - Visiteur anonyme : aucun droit sur les 13 tables.
 - `collaborateurs.taux_horaire` : droit de colonne retiré à `authenticated` → toujours lister les
-  colonnes (jamais `select=*`, jamais `return=representation` sans `select=`). Lecture des taux :
-  `taux_horaires_collaborateurs()` (admin actif seulement).
-- `prochain_numero` : jamais pour anon ; à exposer proprement dans le module Finance.
+  colonnes (jamais `select=*`, jamais `return=representation` sans `select=`).
+- RÈGLE DE L'UTILISATEUR — taux horaires : lecture UNIQUEMENT côté serveur avec la clé secrète
+  (`creerClientAdmin()`), après `exigerAdmin()` dans l'action serveur ou la page ; valeurs transmises
+  seulement à l'écran d'édition admin. AUCUNE fonction SQL appelable avec un jeton utilisateur (même
+  admin) ne doit renvoyer un taux (`taux_horaires_collaborateurs()` a été supprimée, migration
+  20261023130000 ; une assertion échoue si une fonction mentionne taux_horaire).
+- Fonctions appelables avec un jeton utilisateur : EXACTEMENT `acces_actif`, `mon_role`,
+  `mon_collaborateur_id`, `est_admin` (elles ne renseignent que sur soi et appliquent le contrôle de
+  session). Aucune pour anon. Toute fonction métier : `service_role` seulement, appelée par une action
+  serveur après vérification des droits. L'assertion de la migration 20261023130000 l'impose : toute
+  nouvelle fonction devra être ajoutée consciemment à cette liste (ou révoquée).
+- `prochain_numero` : `service_role` seulement (même un admin ne peut plus consommer un numéro depuis
+  le navigateur). Fonction SECURITY INVOKER (constaté : un appel non admin échouait sur la RLS de compteurs).
 - Bucket `justificatifs` : admin seulement (règle `justificatifs_admin_seulement`).
-- Tests : `tests-reels/tests_verrouillage.py` (113 appels directs) + `instantane.py` (empreinte des données).
+- Toute règle RLS (13 tables + storage.objects) doit appeler une fonction de contrôle de session
+  (`est_admin|mon_role|mon_collaborateur_id|acces_actif`) : assertion dans 20261023130000.
+- Résultats vérifiés le 23/10/2026 par appels directs (`tests-reels/tests_verrouillage.py`, 135/135) :
+  anonyme refusé partout (13 tables, fonctions, stockage) ; collaborateur/manager : 0 ligne sur les
+  11 tables, écritures refusées ; taux illisible (colonne, select=*, filtre, tri) pour tous les jetons,
+  même admin ; aucune fonction de taux ; prochain_numero refusé même à l'admin ; admin provisoire (jeton
+  valide, mot de passe à changer) : tables, fonctions d'identité et stockage muets ; anciens jetons
+  après révocation (admin et collaborateur), déconnexion, réinitialisation, bannissement : tables,
+  fonctions d'identité et stockage muets ; données réelles identiques (instantane.py).
+- Tests : `tests-reels/tests_verrouillage.py` + `instantane.py` (empreinte des données) à relancer après
+  chaque module.
 
 ## Pièges
 - Compte sans `collaborateur_id` = ne voit rien, sans erreur → afficher un avertissement VISIBLE.

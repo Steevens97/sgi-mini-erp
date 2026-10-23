@@ -123,9 +123,11 @@ def main():
         verifier(f"lecture {t} refusée", s in REFUS, f"HTTP {s}")
     s, r = appel("POST", "/rest/v1/clients", corps={"nom": "Intrus"})
     verifier("création d'un client refusée", s in REFUS, f"HTTP {s}")
-    for f in ("mon_role", "est_admin", "acces_actif", "taux_horaires_collaborateurs"):
+    for f in ("mon_role", "est_admin", "acces_actif"):
         s, r = appel("POST", f"/rest/v1/rpc/{f}", corps={})
         verifier(f"{f}() refusée", s in REFUS, f"HTTP {s}")
+    s, r = appel("POST", "/rest/v1/rpc/taux_horaires_collaborateurs", corps={})
+    verifier("taux_horaires_collaborateurs() n'existe plus", s == 404, f"HTTP {s}")
     s, r = appel("POST", "/rest/v1/rpc/prochain_numero", corps={"p_cle": "essai_securite", "p_prefixe": "ESSAI"})
     verifier("prochain_numero() refusée", s in REFUS, f"HTTP {s} : {message(r)}")
     s, r = appel("POST", "/storage/v1/object/list/justificatifs", corps={"prefix": ""})
@@ -163,12 +165,11 @@ def main():
     verifier("collaborateur : sa fiche reste lisible sans le taux", [x["id"] for x in lignes(r)] == [LEA], f"{len(lignes(r))} fiche(s)")
     s, r = appel("GET", "/rest/v1/collaborateurs?select=id,nom", j["manager"])
     verifier("manager : toutes les fiches lisibles sans le taux", len(lignes(r)) >= 3, f"{len(lignes(r))} fiche(s)")
-    for qui in ("collab", "manager"):
+    for qui in ("collab", "manager", "admin"):
         s, r = appel("POST", "/rest/v1/rpc/taux_horaires_collaborateurs", j[qui], {})
-        verifier(f"{qui} : taux_horaires_collaborateurs() ne renvoie rien", lignes(r) == [], f"HTTP {s}")
-    s, r = appel("POST", "/rest/v1/rpc/taux_horaires_collaborateurs", j["admin"], {})
-    verifier("admin : taux_horaires_collaborateurs() renvoie les taux", len(lignes(r)) >= 3 and all("taux_horaire" in x for x in lignes(r)),
-             f"{len(lignes(r))} taux")
+        verifier(f"{qui} : aucune fonction de taux appelable avec son jeton", s >= 400, f"HTTP {s} : {message(r)}")
+    s, r = secret("GET", "/rest/v1/collaborateurs?select=id,taux_horaire")
+    verifier("côté serveur, la clé secrète lit les taux", len(lignes(r)) >= 3, f"{len(lignes(r))} taux")
     s, r = appel("PATCH", f"/rest/v1/collaborateurs?id=eq.{LEA}", j["collab"], {"taux_horaire": 999}, entetes={"Prefer": "return=minimal"})
     s2, v = secret("GET", f"/rest/v1/collaborateurs?id=eq.{LEA}&select=taux_horaire")
     verifier("collaborateur : ne peut pas changer son taux", v[0]["taux_horaire"] != 999, f"HTTP {s}, taux = {v[0]['taux_horaire']}")
@@ -189,6 +190,8 @@ def main():
     if ok:
         s, r2 = appel("DELETE", f"/rest/v1/clients?id=eq.{r[0]['id']}", j["admin"], entetes={"Prefer": "return=representation"})
         verifier("suppression de ce client de test", len(lignes(r2)) == 1, f"HTTP {s}")
+    s, r = appel("POST", "/rest/v1/rpc/prochain_numero", j["admin"], {"p_cle": "essai_securite", "p_prefixe": "ESSAI"})
+    verifier("prochain_numero() refusée même à l'admin (clé secrète seulement)", s in REFUS, f"HTTP {s} : {message(r)}")
     nom_fichier = f"jetable-{T}.txt"
     s, r = appel("POST", f"/storage/v1/object/justificatifs/{nom_fichier}", j["collab"], brut=b"essai", entetes={"Content-Type": "text/plain"})
     verifier("bucket : dépôt par un collaborateur refusé", s >= 400, f"HTTP {s}")
@@ -210,6 +213,14 @@ def main():
     s, r = appel("PATCH", f"/rest/v1/profiles?id=eq.{c['collab']['id']}", j["admin_provisoire"], {"role": "admin"},
                  entetes={"Prefer": "return=representation"})
     verifier("ne peut pas attribuer de rôle", lignes(r) == [], f"HTTP {s}")
+    for f in ("mon_role", "mon_collaborateur_id"):
+        s, r = appel("POST", f"/rest/v1/rpc/{f}", j["admin_provisoire"], {})
+        verifier(f"{f}() ne renvoie rien", r is None, f"HTTP {s}, {r!r}")
+    s, r = appel("POST", "/storage/v1/object/justificatifs/provisoire.txt", j["admin_provisoire"], brut=b"x",
+                 entetes={"Content-Type": "text/plain"})
+    verifier("stockage : dépôt refusé", s >= 400, f"HTTP {s}")
+    s, r = appel("POST", "/storage/v1/object/list/justificatifs", j["admin_provisoire"], {"prefix": ""})
+    verifier("stockage : rien de visible", lignes(r) == [], f"HTTP {s}")
     secret("PUT", f"/auth/v1/admin/users/{c['admin_provisoire']['id']}", {"app_metadata": {"doit_changer_mot_de_passe": False}})
     s, r = appel("POST", "/rest/v1/rpc/est_admin", j["admin_provisoire"], {})
     verifier("après levée de l'obligation, le même jeton redevient admin", r is True, repr(r))
@@ -240,9 +251,29 @@ def main():
         verifier(f"{libelle} : l'ancien jeton ne voit plus rien et n'écrit plus",
                  avant_action > 0 and apres == 0 and s in REFUS,
                  f"lignes visibles avant {avant_action} → après {apres}, écriture HTTP {s}")
+        roles = [appel("POST", f"/rest/v1/rpc/{f}", jj, {})[1] for f in ("mon_role", "mon_collaborateur_id", "est_admin")]
+        verifier(f"{libelle} : fonctions d'identité muettes", roles[:2] == [None, None] and roles[2] is False, repr(roles))
+        s, r = appel("POST", f"/storage/v1/object/justificatifs/ancien-{i}.txt", jj, brut=b"x", entetes={"Content-Type": "text/plain"})
+        verifier(f"{libelle} : stockage refusé", s >= 400, f"HTTP {s}")
         c[f"ancien_{i}"] = compte
 
-    print("\n== 8. Votre compte et vos données")
+    print("\n== 8. Inventaire des fonctions exposées par l'API")
+    s, d = appel("GET", "/rest/v1/", cle=SECRET, entetes={"Accept": "application/openapi+json"})
+    fonctions = sorted(p[5:] for p in d["paths"] if p.startswith("/rpc/"))
+    print("  fonctions exposées :", ", ".join(fonctions))
+    identite = {"acces_actif", "est_admin", "mon_collaborateur_id", "mon_role"}
+    for f in fonctions:
+        args = {"p_cle": "essai_securite", "p_prefixe": "ESSAI"} if f == "prochain_numero" else {}
+        s_anon, _ = appel("POST", f"/rest/v1/rpc/{f}", corps=args)
+        s_admin, r_admin = appel("POST", f"/rest/v1/rpc/{f}", j["admin"], args)
+        if f in identite:
+            verifier(f"{f} : visiteur refusé, admin actif autorisé (ne concerne que lui-même)",
+                     s_anon in REFUS and s_admin == 200, f"visiteur {s_anon}, admin {s_admin}")
+        else:
+            verifier(f"{f} : refusée au visiteur ET à l'admin actif", s_anon in REFUS and s_admin in REFUS,
+                     f"visiteur {s_anon}, admin {s_admin}")
+
+    print("\n== 9. Votre compte et vos données")
     s, r = secret("GET", "/rest/v1/profiles?email=eq.sgi@gmx.fr&select=role")
     verifier("sgi@gmx.fr toujours admin", lignes(r) and r[0]["role"] == "admin")
     apres = compter_tout()
