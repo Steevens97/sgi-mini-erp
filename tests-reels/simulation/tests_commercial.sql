@@ -31,6 +31,8 @@ create function essai.valeur(p_sql text) returns text language plpgsql as $$
 declare v text;
 begin execute p_sql into v; return v;
 exception when others then return 'ERREUR: ' || left(sqlerrm, 80); end $$;
+create function essai.emetteur() returns jsonb language sql as $$ select '{"raison_sociale":"SIMULATION SG Ingénierie","forme_juridique":"SAS","capital_social":"SIMULATION","adresse":"SIMULATION adresse","code_postal":"97200","ville":"Fort-de-France","siret":"00000000000000","immatriculation":"SIMULATION RCS","tva_intracom":"FR00000000000","validite_jours":"30","assurance_assureur":"SIMULATION","assurance_contrat":"SIMULATION","assurance_couverture":"SIMULATION"}'::jsonb $$;
+create function essai.emetteur_demo() returns jsonb language sql as $$ select essai.emetteur() || '{"raison_sociale":"[DÉMO] SG Ingénierie"}'::jsonb $$;
 grant execute on all functions in schema essai to authenticated, anon, service_role;
 
 -- Comptes : admin (sgi existant), manager, collaborateur, manager provisoire, collaborateur à jeton périmé
@@ -66,8 +68,8 @@ alter table public.prospects alter column id set default 'cccccccc-0000-0000-000
 alter table public.devis alter column id set default 'dddddddd-0000-0000-0000-000000000001'::uuid;
 set role authenticated;
 select essai.accepte('manager : crée un prospect',
-  $q$insert into public.prospects (nom, societe, email, telephone) values
-     ('Mme Client','BTP Caraïbes','contact@exemple.invalid','0596000000')$q$);
+  $q$insert into public.prospects (nom, societe, email, telephone, adresse, ville, pays) values
+     ('Mme Client','BTP Caraïbes','contact@exemple.invalid','0596000000','12 rue des Essais','Fort-de-France','MQ')$q$);
 select essai.refus('manager : ne crée pas un prospect « gagné »',
   $q$insert into public.prospects (nom, statut) values ('X', 'gagne')$q$);
 select essai.accepte('manager : crée un devis brouillon',
@@ -141,22 +143,37 @@ reset role;
 -- ===================== SERVEUR (clé secrète) : émission =====================
 set role service_role;
 select essai.refus('émission refusée à un collaborateur (auteur vérifié en base)',
-  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003','{"raison_sociale":"SGI"}','v1')$q$);
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003',essai.emetteur(),'v1')$q$);
 select essai.refus('émission refusée à un manager devant changer son mot de passe',
-  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000004','{"raison_sociale":"SGI"}','v1')$q$);
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000004',essai.emetteur(),'v1')$q$);
 select essai.refus('émission sans coordonnées de l''émetteur refusée',
   $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',null,'v1')$q$);
-select essai.ok('compteur intact après les émissions refusées',
-  (select count(*) = 0 from public.compteurs where cle like 'essai_devis_%'));
+select essai.refus('émission avec coordonnées incomplètes refusée (liste des champs manquants)',
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',
+     essai.emetteur() - 'siret' - 'assurance_contrat','v1')$q$);
+select essai.refus('coordonnées de démonstration [DÉMO] sur un devis réel : refusées',
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',essai.emetteur_demo(),'v1')$q$);
+select essai.refus('émission avec SIRET invalide refusée',
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',
+     essai.emetteur() || '{"siret":"123"}','v1')$q$);
+select essai.refus('émission avec adresse du destinataire incomplète refusée (code postal manquant)',
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',essai.emetteur(),'v1')$q$);
+reset role;
+update public.prospects set code_postal = '97200' where id = 'cccccccc-0000-0000-0000-000000000001';
+set role service_role;
+select essai.ok('compteurs intacts après les émissions refusées',
+  (select count(*) = 0 from public.compteurs));
 select essai.ok('émission : numéro d''essai attribué',
-  essai.valeur($q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002','{"raison_sociale":"SG Ingénierie","adresse":"Fort-de-France"}','v1')$q$) like 'ESSAI-DEV-____-0001',
+  essai.valeur($q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',essai.emetteur(),'v1')$q$) like 'DEV-____-0001',
   (select numero from public.devis where id='dddddddd-0000-0000-0000-000000000001'));
 select essai.ok('nouvel essai d''émission : même numéro, aucun numéro consommé',
-  essai.valeur($q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002','{"raison_sociale":"autre"}','v1')$q$)
+  essai.valeur($q$select public.emettre_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002',essai.emetteur(),'v1')$q$)
     = (select numero from public.devis where id='dddddddd-0000-0000-0000-000000000001')
-  and (select valeur from public.compteurs where cle like 'essai_devis_%') = 1);
-select essai.ok('instantané figé : émetteur, destinataire, lignes, totaux, TVA',
-  (select instantane_emission ->> 'numero' = numero and instantane_emission #>> '{emetteur,raison_sociale}' = 'SG Ingénierie'
+  and (select valeur from public.compteurs where cle like 'devis_%') = 1);
+select essai.ok('instantané figé : émetteur, adresse du destinataire, lignes, totaux, TVA',
+  (select instantane_emission ->> 'numero' = numero and instantane_emission #>> '{emetteur,raison_sociale}' = 'SIMULATION SG Ingénierie'
+          and instantane_emission #>> '{destinataire,prospect,code_postal}' = '97200'
+          and instantane_emission #>> '{destinataire,prospect,adresse}' = '12 rue des Essais'
           and jsonb_array_length(instantane_emission -> 'lignes') = 2
           and instantane_emission #>> '{destinataire,prospect,societe}' = 'BTP Caraïbes'
           and (instantane_emission #>> '{tva,taux}')::numeric = 8.5
@@ -174,7 +191,7 @@ select essai.refus('PDF déclaré disponible alors qu''absent du stockage : refu
   $q$select public.enregistrer_pdf_devis('dddddddd-0000-0000-0000-000000000001','dddddddd-0000-0000-0000-000000000001/x.pdf',repeat('a',64),1000)$q$);
 select public.signaler_echec_pdf_devis('dddddddd-0000-0000-0000-000000000001', 'Essai : génération interrompue');
 select essai.ok('échec de génération : devis émis, numéro conservé, PDF « echec »',
-  (select statut = 'emis' and numero like 'ESSAI-DEV-%' and pdf_statut = 'echec' from public.devis where id='dddddddd-0000-0000-0000-000000000001'));
+  (select statut = 'emis' and numero like 'DEV-%' and pdf_statut = 'echec' from public.devis where id='dddddddd-0000-0000-0000-000000000001'));
 insert into storage.objects (bucket_id, name, metadata)
 select 'devis', id || '/' || numero || '.pdf', '{"size": 2048}' from public.devis where id='dddddddd-0000-0000-0000-000000000001';
 select essai.refus('PDF : taille différente de celle stockée refusée',
@@ -199,13 +216,13 @@ select essai.refus('envoi : canal inconnu refusé',
 
 -- Nouvelle version d'un devis envoyé
 select essai.ok('nouvelle version créée (brouillon, lignes copiées)',
-  essai.valeur($q$select public.creer_nouvelle_version_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002')$q$) is not null);
+  essai.valeur($q$select public.creer_nouvelle_version_devis('dddddddd-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000002')$q$) not like 'ERREUR%');
 select essai.ok('nouvelle version : 2 lignes, lien vers l''original',
   (select count(*) = 2 from public.devis_lignes l join public.devis d on d.id = l.devis_id where d.remplace_devis_id='dddddddd-0000-0000-0000-000000000001'));
 update public.devis_lignes set prix_unitaire = 500 from public.devis d
  where d.id = devis_lignes.devis_id and d.remplace_devis_id='dddddddd-0000-0000-0000-000000000001' and devis_lignes.designation = 'Diagnostic structure';
 select essai.ok('émission de la version : nouveau numéro',
-  essai.valeur($q$select public.emettre_devis(id,'aaaaaaaa-0000-0000-0000-000000000002','{"raison_sociale":"SG Ingénierie"}','v1') from public.devis where remplace_devis_id='dddddddd-0000-0000-0000-000000000001'$q$) like 'ESSAI-DEV-____-0002');
+  essai.valeur($q$select public.emettre_devis(id,'aaaaaaaa-0000-0000-0000-000000000002',essai.emetteur(),'v1') from public.devis where remplace_devis_id='dddddddd-0000-0000-0000-000000000001'$q$) like 'DEV-____-0002');
 select essai.ok('émission de la version : original passé à « remplacé », contenu et PDF intacts',
   (select statut = 'remplace' and total_ht = 1233.34 and pdf_statut = 'disponible' and pdf_empreinte = repeat('b',64)
      from public.devis where id='dddddddd-0000-0000-0000-000000000001'));
@@ -242,7 +259,7 @@ select essai.refus('prospect gagné : repasser à « perdu » refusé',
 -- Avenant (modification de mission après acceptation)
 set role service_role;
 select essai.ok('avenant créé sur le devis accepté',
-  essai.valeur($q$select public.creer_avenant_devis(id,'aaaaaaaa-0000-0000-0000-000000000002') from public.devis where remplace_devis_id='dddddddd-0000-0000-0000-000000000001'$q$) is not null);
+  essai.valeur($q$select public.creer_avenant_devis(id,'aaaaaaaa-0000-0000-0000-000000000002') from public.devis where remplace_devis_id='dddddddd-0000-0000-0000-000000000001'$q$) not like 'ERREUR%');
 insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire)
 select id, 'Retrait de la note de calcul', -1, 333.34 from public.devis where avenant_du_devis_id is not null;
 insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire)
@@ -250,7 +267,7 @@ select id, 'Mission complémentaire', 1, 800 from public.devis where avenant_du_
 select essai.ok('avenant : lignes négatives permises, total recalculé (466,66 HT)',
   (select total_ht = 466.66 from public.devis where avenant_du_devis_id is not null),
   (select total_ht::text from public.devis where avenant_du_devis_id is not null));
-select public.emettre_devis(id, 'aaaaaaaa-0000-0000-0000-000000000002', '{"raison_sociale":"SG Ingénierie"}', 'v1') from public.devis where avenant_du_devis_id is not null;
+select public.emettre_devis(id, 'aaaaaaaa-0000-0000-0000-000000000002', essai.emetteur(), 'v1') from public.devis where avenant_du_devis_id is not null;
 reset role;
 insert into storage.objects (bucket_id, name, metadata) select 'devis', id || '/' || numero || '.pdf', '{"size": 10}' from public.devis where avenant_du_devis_id is not null;
 set role service_role;
@@ -272,7 +289,7 @@ insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire)
 reset role;
 alter table public.devis alter column id set default gen_random_uuid();
 set role service_role;
-select public.emettre_devis('dddddddd-0000-0000-0000-000000000009', 'aaaaaaaa-0000-0000-0000-000000000002', '{"raison_sociale":"SG Ingénierie"}', 'v1');
+select public.emettre_devis('dddddddd-0000-0000-0000-000000000009', 'aaaaaaaa-0000-0000-0000-000000000002', essai.emetteur(), 'v1');
 reset role;
 select essai.ok('devis à montant nul : 20 % conservé, sans déduction depuis les montants',
   (select taux_tva = 20 and total_ttc = 0 and (instantane_emission #>> '{tva,taux}')::numeric = 20 from public.devis where id='dddddddd-0000-0000-0000-000000000009'));
@@ -310,6 +327,110 @@ select set_config('request.jwt.claims', '', false);
 set role anon;
 select essai.refus('visiteur : vue des devis refusée', $q$select count(*) from public.commercial_devis$q$);
 select essai.refus('visiteur : vue des prospects refusée', $q$select count(*) from public.commercial_prospects$q$);
+reset role;
+
+
+-- ===================== ESSAIS : séquence réservée, jamais choisie par un champ =====================
+select essai.qui('aaaaaaaa-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000002');
+set role authenticated;
+select essai.refus('manager : ne peut pas créer un prospect d''essai (colonne non accessible)',
+  $q$insert into public.prospects (nom, essai) values ('X', true)$q$);
+select essai.refus('manager : ne peut pas appeler creer_prospect_essai',
+  $q$select public.creer_prospect_essai('X','X','x','97200','FdF','MQ')$q$);
+select essai.accepte('manager : prospect réel avec un email @exemple.invalid',
+  $q$insert into public.prospects (nom, societe, email, adresse, code_postal, ville, pays)
+     values ('Email trompeur','Trompe SARL','piege@exemple.invalid','1 rue','97200','Fort-de-France','MQ')$q$);
+insert into public.devis (prospect_id, regime_tva, territoire_tva, taux_tva, criteres_tva)
+select id, 'taxable', 'MQ', 8.5, '{"nature_mission":"prestation_intellectuelle","statut_client":"assujetti_france"}'
+  from public.prospects where email = 'piege@exemple.invalid';
+insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire)
+select d.id, 'Mission', 1, 10 from public.devis d join public.prospects p on p.id = d.prospect_id where p.email = 'piege@exemple.invalid';
+reset role;
+set role service_role;
+select public.emettre_devis(d.id, 'aaaaaaaa-0000-0000-0000-000000000002', essai.emetteur(), 'v1')
+  from public.devis d join public.prospects p on p.id = d.prospect_id where p.email = 'piege@exemple.invalid';
+select essai.ok('un email @exemple.invalid ne donne PAS la séquence d''essai (numéro réel DEV-)',
+  (select d.numero like 'DEV-%' and not d.essai from public.devis d join public.prospects p on p.id = d.prospect_id where p.email = 'piege@exemple.invalid'),
+  (select d.numero from public.devis d join public.prospects p on p.id = d.prospect_id where p.email = 'piege@exemple.invalid'));
+select essai.ok('essai autorisé : prospect d''essai créé par la clé secrète',
+  essai.valeur($q$select public.creer_prospect_essai('Essai','Essai SAS','1 rue','97200','Fort-de-France','MQ')$q$) not like 'ERREUR%');
+insert into public.devis (prospect_id, regime_tva, territoire_tva, taux_tva, criteres_tva)
+select id, 'taxable', 'MQ', 8.5, '{"nature_mission":"prestation_intellectuelle","statut_client":"assujetti_france"}'
+  from public.prospects where essai;
+insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire)
+select d.id, 'Mission', 1, 10 from public.devis d where d.essai;
+select public.emettre_devis(d.id, 'aaaaaaaa-0000-0000-0000-000000000002', essai.emetteur(), 'v1') from public.devis d where d.essai;
+select essai.ok('devis d''essai : séquence ESSAI-DEV, instantané marqué « essai »',
+  (select numero like 'ESSAI-DEV-%' and (instantane_emission ->> 'essai')::boolean from public.devis where essai),
+  (select numero from public.devis where essai));
+select essai.refus('le caractère essai d''un devis ne change pas (même clé secrète)',
+  $q$update public.devis set essai = false where essai$q$);
+select essai.refus('le caractère essai d''un prospect ne change pas (même clé secrète)',
+  $q$update public.prospects set essai = false where essai$q$);
+reset role;
+select essai.qui('aaaaaaaa-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000002');
+set role authenticated;
+select essai.refus('manager : ne crée pas de devis pour un prospect d''essai',
+  $q$insert into public.devis (prospect_id) select id from public.prospects where essai$q$);
+select essai.refus('manager : ne modifie pas un prospect d''essai',
+  $q$update public.prospects set nom = 'Réel' where essai$q$);
+select essai.refus('manager : ne rattache pas un client réel à un prospect d''essai',
+  $q$update public.prospects set client_id = '33333333-3333-3333-3333-333333333331' where essai$q$);
+reset role;
+
+-- ===================== AVENANTS : rattachement au projet, totaux négatifs =====================
+select essai.ok('avenant visible depuis le projet du devis accepté',
+  (select count(*) = 1 from public.projets pj
+     join public.devis a on a.avenant_du_devis_id = pj.devis_id
+    where pj.devis_id = (select id from public.devis where remplace_devis_id = 'dddddddd-0000-0000-0000-000000000001')));
+set role service_role;
+select public.creer_avenant_devis(id, 'aaaaaaaa-0000-0000-0000-000000000002') from public.devis where remplace_devis_id = 'dddddddd-0000-0000-0000-000000000001';
+reset role;
+-- Avenant 2 : moins-value de 2000 € HT alors que la mission vaut 1333,34 + 466,66 = 1800 € HT
+insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire)
+select id, 'Suppression de mission', -1, 2000 from public.devis
+ where avenant_du_devis_id is not null and statut = 'brouillon';
+set role service_role;
+select essai.refus('avenant rendant la mission négative : émission refusée',
+  $q$select public.emettre_devis(id, 'aaaaaaaa-0000-0000-0000-000000000002', essai.emetteur(), 'v1') from public.devis where avenant_du_devis_id is not null and statut = 'brouillon'$q$);
+reset role;
+update public.devis_lignes set prix_unitaire = 1500 from public.devis d
+ where d.id = devis_lignes.devis_id and d.avenant_du_devis_id is not null and d.statut = 'brouillon';
+set role service_role;
+select essai.accepte('avenant à total négatif (-1500 € HT) mais mission positive : émission acceptée',
+  $q$select public.emettre_devis(id, 'aaaaaaaa-0000-0000-0000-000000000002', essai.emetteur(), 'v1') from public.devis where avenant_du_devis_id is not null and statut = 'brouillon'$q$);
+select essai.ok('avenant négatif : TVA négative calculée (-127,50), TTC -1627,50',
+  (select tva = -127.50 and total_ttc = -1627.50 from public.devis where avenant_du_devis_id is not null and total_ht < 0),
+  (select tva || ' / ' || total_ttc from public.devis where avenant_du_devis_id is not null and total_ht < 0));
+reset role;
+select essai.refus('un devis initial (non avenant) ne peut pas avoir un total négatif',
+  $q$insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire) values ('dddddddd-0000-0000-0000-000000000009','Remise',-1,5)$q$);
+select essai.ok('projets : toujours un seul pour la mission et ses avenants',
+  (select count(*) = 1 from public.projets where devis_id = (select id from public.devis where remplace_devis_id = 'dddddddd-0000-0000-0000-000000000001')));
+
+-- ===================== VUES : tentatives de contournement =====================
+select essai.qui('aaaaaaaa-0000-0000-0000-000000000003', 'bbbbbbbb-0000-0000-0000-000000000003');
+set role authenticated;
+select essai.ok('jointure vue → table prospects : aucune coordonnée',
+  essai.valeur($q$select count(*) from public.commercial_devis d join public.prospects p on p.id = d.prospect_id$q$) = '0');
+select essai.ok('jointure vue → table clients : aucune ligne',
+  essai.valeur($q$select count(*) from public.commercial_prospects v join public.clients c on true$q$) = '0');
+select essai.ok('sous-requête sur la table prospects depuis la vue : vide',
+  essai.valeur($q$select count(*) from public.commercial_devis where prospect_id in (select id from public.prospects)$q$) = '0');
+select essai.refus('filtre sur une colonne cachée (email) : impossible',
+  $q$select count(*) from public.commercial_prospects where email like '%@%'$q$);
+select essai.refus('filtre sur une colonne cachée (critères TVA) : impossible',
+  $q$select count(*) from public.commercial_devis where criteres_tva ? 'numero_tva_client'$q$);
+select essai.ok('table projets : rien de lisible pour le collaborateur',
+  essai.valeur($q$select count(*) from public.projets$q$) = '0');
+reset role;
+select essai.qui('aaaaaaaa-0000-0000-0000-000000000005', 'bbbbbbbb-0000-0000-0000-000000000099');
+set role authenticated;
+select essai.ok('session révoquée + filtre « piège » (erreur si une ligne cachée était lue) : aucune ligne, aucune erreur',
+  essai.valeur($q$select count(*) from public.commercial_prospects where 1 / (length(nom) - length(nom)) = 1$q$) = '0',
+  essai.valeur($q$select count(*) from public.commercial_prospects where 1 / (length(nom) - length(nom)) = 1$q$));
+select essai.ok('session révoquée + filtre piège sur les lignes de devis : aucune ligne, aucune erreur',
+  essai.valeur($q$select count(*) from public.commercial_devis_lignes where 1 / (montant_ht - montant_ht) = 1$q$) = '0');
 reset role;
 
 -- ===================== Données existantes =====================

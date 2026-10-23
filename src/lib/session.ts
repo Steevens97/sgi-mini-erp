@@ -55,3 +55,10 @@ export async function exigerAdmin(): Promise<UtilisateurCourant> {
   if (utilisateur.role !== "admin") redirect("/");
   return utilisateur;
 }
+
+// Actions commerciales (prospects, devis) : administrateur ou manager actif.
+export async function exigerCommercial(): Promise<UtilisateurCourant> {
+  const utilisateur = await lireUtilisateurCourant();
+  if (utilisateur.role !== "admin" && utilisateur.role !== "manager") redirect("/commercial");
+  return utilisateur;
+}

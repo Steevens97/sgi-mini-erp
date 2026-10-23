@@ -47,6 +47,18 @@ alter table public.factures
   add column if not exists mention_tva text,
   add column if not exists criteres_tva jsonb;
 
+-- Adresse complète du destinataire (figée dans l'instantané à l'émission) et indicateur d'essai.
+-- « essai » n'est modifiable par aucun jeton (pas de droit de colonne) et ne change jamais ;
+-- les lignes existantes reçoivent la valeur false (ce sont des données réelles).
+alter table public.prospects
+  add column if not exists adresse text,
+  add column if not exists code_postal text,
+  add column if not exists ville text,
+  add column if not exists pays text,
+  add column if not exists essai boolean not null default false;
+alter table public.devis
+  add column if not exists essai boolean not null default false;
+
 -- C. Envoi déclaré ; émission ; décision du client
 alter table public.devis
   add column if not exists date_envoi timestamptz,
@@ -247,6 +259,87 @@ begin
 end
 $$;
 
+-- Appel fait avec un jeton utilisateur (application ou API), par opposition à la clé secrète
+-- ou au tableau de bord. Lit le rôle sous lequel la requête s'exécute (posé par l'API, inchangé
+-- dans une fonction SECURITY DEFINER), jamais le contenu du jeton.
+create or replace function public.appel_utilisateur()
+returns boolean
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce(current_setting('role', true), '') in ('authenticated', 'anon');
+$$;
+
+-- Coordonnées de l'émetteur (SG Ingénierie) : champs indispensables, sinon émission bloquée.
+-- La liste est à valider par l'utilisateur et son expert-comptable (voir CLAUDE.md).
+create or replace function public.controle_emetteur(p_emetteur jsonb)
+returns text
+language plpgsql
+immutable
+set search_path = public
+as $$
+declare
+  v_manquants text[] := '{}';
+  v_cle text;
+begin
+  if p_emetteur is null or jsonb_typeof(p_emetteur) <> 'object' then
+    return 'coordonnées de l''émetteur absentes';
+  end if;
+  foreach v_cle in array array['raison_sociale', 'forme_juridique', 'adresse', 'code_postal', 'ville', 'siret',
+                               'immatriculation', 'tva_intracom', 'validite_jours', 'assurance_assureur',
+                               'assurance_contrat', 'assurance_couverture'] loop
+    if coalesce(trim(p_emetteur ->> v_cle), '') = '' then
+      v_manquants := v_manquants || v_cle;
+    end if;
+  end loop;
+  if upper(coalesce(p_emetteur ->> 'forme_juridique', '')) in ('SARL', 'EURL', 'SAS', 'SASU', 'SA', 'SNC',
+                                                               'SELARL', 'SELAS')
+     and coalesce(trim(p_emetteur ->> 'capital_social'), '') = '' then
+    v_manquants := v_manquants || 'capital_social'::text;
+  end if;
+  if array_length(v_manquants, 1) > 0 then
+    return 'coordonnées de SG Ingénierie incomplètes : ' || array_to_string(v_manquants, ', ');
+  end if;
+  if replace(p_emetteur ->> 'siret', ' ', '') !~ '^[0-9]{14}$' then
+    return 'SIRET de l''émetteur invalide (14 chiffres)';
+  end if;
+  if (p_emetteur ->> 'validite_jours') !~ '^[1-9][0-9]*$' then
+    return 'durée de validité du devis invalide (nombre de jours)';
+  end if;
+  return null;
+end
+$$;
+
+-- Destinataire : nom (ou société) et adresse postale complète, obligatoires avant l'émission.
+create or replace function public.controle_destinataire(p_prospect_id uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v public.prospects;
+  v_manquants text[] := '{}';
+begin
+  select * into v from public.prospects where id = p_prospect_id;
+  if coalesce(trim(v.societe), '') = '' and coalesce(trim(v.nom), '') = '' then
+    v_manquants := v_manquants || 'nom ou société'::text;
+  end if;
+  if coalesce(trim(v.adresse), '') = '' then v_manquants := v_manquants || 'adresse'::text; end if;
+  if coalesce(trim(v.ville), '') = '' then v_manquants := v_manquants || 'ville'::text; end if;
+  if coalesce(trim(v.pays), '') = '' then v_manquants := v_manquants || 'pays'::text; end if;
+  if v.pays in ('FR', 'MQ', 'GP', 'GF', 'RE', 'YT') and coalesce(trim(v.code_postal), '') = '' then
+    v_manquants := v_manquants || 'code postal'::text;
+  end if;
+  if array_length(v_manquants, 1) > 0 then
+    return 'adresse du destinataire incomplète : ' || array_to_string(v_manquants, ', ');
+  end if;
+  return null;
+end
+$$;
+
 -- Instantané de tout ce qui est imprimé, construit par la base au moment de l'émission.
 create or replace function public.construire_instantane_devis(p_devis public.devis)
 returns jsonb
@@ -257,6 +350,7 @@ set search_path = public
 as $$
   select jsonb_build_object(
     'version', 1,
+    'essai', p_devis.essai,
     'emetteur', p_devis.instantane_emission -> 'emetteur',
     'gabarit', p_devis.instantane_emission ->> 'gabarit',
     'numero', p_devis.numero,
@@ -265,7 +359,8 @@ as $$
     'destinataire', (
       select jsonb_build_object(
         'prospect', jsonb_build_object('nom', pr.nom, 'societe', pr.societe, 'email', pr.email,
-                                       'telephone', pr.telephone),
+                                       'telephone', pr.telephone, 'adresse', pr.adresse,
+                                       'code_postal', pr.code_postal, 'ville', pr.ville, 'pays', pr.pays),
         'client', case when c.id is null then null else
                   jsonb_build_object('nom', c.nom, 'adresse', c.adresse, 'email', c.email_contact,
                                      'telephone', c.telephone) end)
@@ -285,6 +380,31 @@ as $$
     'avenant_de', (select d.numero from public.devis d where d.id = p_devis.avenant_du_devis_id));
 $$;
 
+-- Cumul d'une mission : devis initial + avenants acceptés + l'avenant examiné ne peut pas être négatif.
+create or replace function public.controle_cumul_avenants(p_initial uuid, p_avenant uuid, p_total_avenant numeric)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_cumul numeric;
+begin
+  select d.total_ht
+         + coalesce((select sum(a.total_ht) from public.devis a
+                      where a.avenant_du_devis_id = p_initial and a.statut = 'accepte' and a.id <> p_avenant), 0)
+         + p_total_avenant
+    into v_cumul
+    from public.devis d where d.id = p_initial;
+  if v_cumul < 0 then
+    return 'le total de la mission (devis initial + avenants acceptés + cet avenant) deviendrait négatif ('
+           || v_cumul || ' € HT)';
+  end if;
+  return null;
+end
+$$;
+
 -- 5. Déclencheurs ---------------------------------------------------------------------------------
 -- 5a. Lignes : seulement sur un brouillon ; montant recalculé ; totaux du devis recalculés.
 create or replace function public.devis_lignes_avant()
@@ -296,15 +416,20 @@ as $$
 declare
   v_statut text;
   v_avenant uuid;
+  v_essai boolean;
   v_devis uuid := case when tg_op = 'DELETE' then old.devis_id else new.devis_id end;
 begin
   if tg_op = 'UPDATE' and new.devis_id is distinct from old.devis_id then
     raise exception 'Une ligne ne peut pas changer de devis';
   end if;
-  select statut, avenant_du_devis_id into v_statut, v_avenant from public.devis where id = v_devis for update;
+  select statut, avenant_du_devis_id, essai into v_statut, v_avenant, v_essai
+    from public.devis where id = v_devis for update;
   if not found then
     if tg_op = 'DELETE' then return old; end if;  -- suppression en cascade du devis
     raise exception 'Devis introuvable';
+  end if;
+  if v_essai and public.appel_utilisateur() then
+    raise exception 'Devis d''essai : modifiable uniquement par les essais autorisés (clé secrète)';
   end if;
   if v_statut <> 'brouillon' then
     raise exception 'Devis % : les lignes ne sont modifiables qu''au stade brouillon', v_statut;
@@ -361,6 +486,14 @@ declare
 begin
   if new.statut is distinct from 'brouillon' or new.numero is not null then
     raise exception 'Un devis est toujours créé en brouillon, sans numéro';
+  end if;
+  -- Le caractère « essai » vient du prospect (posé par une fonction réservée), jamais de la saisie.
+  select essai into new.essai from public.prospects where id = new.prospect_id;
+  if new.essai is null then
+    raise exception 'Prospect introuvable';
+  end if;
+  if new.essai and public.appel_utilisateur() then
+    raise exception 'Devis d''essai : création réservée aux essais autorisés (clé secrète)';
   end if;
   if coalesce(new.date_envoi::text, new.canal_envoi, new.envoi_destinataire, new.envoi_declare_par::text,
               new.envoi_declare_par_nom, new.envoi_declare_le::text, new.emis_par::text, new.emis_par_nom,
@@ -420,6 +553,12 @@ declare
   v_erreur text;
   v_source public.devis;
 begin
+  if new.essai is distinct from old.essai then
+    raise exception 'Le caractère « essai » d''un devis ne change jamais';
+  end if;
+  if old.essai and public.appel_utilisateur() then
+    raise exception 'Devis d''essai : modifiable uniquement par les essais autorisés (clé secrète)';
+  end if;
   -- Contenu figé hors brouillon.
   if old.statut <> 'brouillon' and
      (new.id, new.prospect_id, new.numero, new.date_emission, new.total_ht, new.tva, new.total_ttc,
@@ -504,9 +643,19 @@ begin
     if v_nb = 0 then
       raise exception 'Émission impossible : aucune ligne';
     end if;
-    if new.instantane_emission is null or jsonb_typeof(new.instantane_emission -> 'emetteur') <> 'object'
-       or coalesce(new.instantane_emission ->> 'gabarit', '') = '' then
-      raise exception 'Émission impossible : coordonnées de l''émetteur et version du gabarit obligatoires';
+    if new.instantane_emission is null or coalesce(new.instantane_emission ->> 'gabarit', '') = '' then
+      raise exception 'Émission impossible : version du gabarit obligatoire';
+    end if;
+    v_erreur := public.controle_emetteur(new.instantane_emission -> 'emetteur');
+    if v_erreur is not null then
+      raise exception 'Émission impossible : %', v_erreur;
+    end if;
+    if not new.essai and (new.instantane_emission -> 'emetteur')::text ilike '%[DÉMO]%' then
+      raise exception 'Émission impossible : coordonnées de démonstration interdites sur un devis réel';
+    end if;
+    v_erreur := public.controle_destinataire(new.prospect_id);
+    if v_erreur is not null then
+      raise exception 'Émission impossible : %', v_erreur;
     end if;
     if new.remplace_devis_id is not null then
       select * into v_source from public.devis where id = new.remplace_devis_id for update;
@@ -514,19 +663,29 @@ begin
         raise exception 'Le devis remplacé n''est plus émis ou envoyé (statut : %)', v_source.statut;
       end if;
     end if;
+    select coalesce(sum(montant_ht), 0) into new.total_ht from public.devis_lignes where devis_id = new.id;
+    new.tva := public.montant_tva(new.regime_tva, new.taux_tva, new.total_ht);
+    new.total_ttc := new.total_ht + new.tva;
+
     if new.avenant_du_devis_id is not null then
       select * into v_source from public.devis where id = new.avenant_du_devis_id;
       if v_source.statut <> 'accepte' then
         raise exception 'Le devis complété par cet avenant n''est plus accepté';
       end if;
+      if not exists (select 1 from public.projets where devis_id = v_source.id) then
+        raise exception 'Le devis accepté n''a pas de projet : avenant impossible';
+      end if;
+      v_erreur := public.controle_cumul_avenants(v_source.id, new.id, new.total_ht);
+      if v_erreur is not null then
+        raise exception 'Émission impossible : %', v_erreur;
+      end if;
+    elsif new.total_ht < 0 then
+      raise exception 'Émission impossible : seul un avenant peut avoir un total négatif';
     end if;
 
-    select coalesce(sum(montant_ht), 0) into new.total_ht from public.devis_lignes where devis_id = new.id;
-    new.tva := public.montant_tva(new.regime_tva, new.taux_tva, new.total_ht);
-    new.total_ttc := new.total_ht + new.tva;
-
-    -- Numéro : compteur d'essai pour les prospects jetables (@exemple.invalid), sinon compteur réel.
-    select coalesce(email, '') ilike '%@exemple.invalid' into v_essai from public.prospects where id = new.prospect_id;
+    -- Numéro : compteur d'essai seulement pour un devis d'essai (indicateur non modifiable),
+    -- sinon compteur réel. Aucun champ commercial n'influe sur la séquence.
+    v_essai := new.essai;
     v_annee := to_char(now() at time zone 'America/Martinique', 'YYYY');
     new.numero := public.prochain_numero(
       case when v_essai then 'essai_devis_' else 'devis_' end || v_annee,
@@ -559,6 +718,12 @@ begin
   end if;
 
   if old.statut = 'envoye' and new.statut in ('accepte', 'refuse') then
+    if new.statut = 'accepte' and new.avenant_du_devis_id is not null then
+      v_erreur := public.controle_cumul_avenants(new.avenant_du_devis_id, new.id, new.total_ht);
+      if v_erreur is not null then
+        raise exception 'Acceptation impossible : %', v_erreur;
+      end if;
+    end if;
     new.decision_le := now();
     if new.decision_par is null then
       new.decision_par_nom := 'Hors application (' || session_user || ')';
@@ -611,14 +776,17 @@ begin
     if new.avenant_du_devis_id is null then
       v_client := v_prospect.client_id;
       if v_client is null then
-        insert into public.clients (nom, email_contact, telephone)
-        values (coalesce(nullif(trim(v_prospect.societe), ''), v_prospect.nom), v_prospect.email,
-                v_prospect.telephone)
+        insert into public.clients (nom, email_contact, telephone, adresse)
+        values (case when new.essai then '[ESSAI] ' else '' end
+                  || coalesce(nullif(trim(v_prospect.societe), ''), v_prospect.nom),
+                v_prospect.email, v_prospect.telephone,
+                concat_ws(E'\n', v_prospect.adresse,
+                          nullif(concat_ws(' ', v_prospect.code_postal, v_prospect.ville), ''), v_prospect.pays))
         returning id into v_client;
         update public.prospects set client_id = v_client where id = v_prospect.id;
       end if;
       insert into public.projets (nom, client_id, devis_id, statut)
-      values ('Projet ' || new.numero, v_client, new.id, 'en_cours')
+      values (case when new.essai then '[ESSAI] ' else '' end || 'Projet ' || new.numero, v_client, new.id, 'en_cours')
       on conflict (devis_id) where devis_id is not null do nothing;
     end if;
     update public.prospects set statut = 'gagne' where id = v_prospect.id and statut <> 'gagne';
@@ -660,11 +828,24 @@ declare
   v_accepte boolean;
   v_envoye boolean;
 begin
+  if new.pays is not null and new.pays !~ '^[A-Z]{2}$' then
+    raise exception 'Pays du prospect : code à 2 lettres (FR, MQ, GP, GF, DE…)';
+  end if;
   if tg_op = 'INSERT' then
     if new.statut not in ('contacte', 'perdu') then
       raise exception 'Un prospect est créé « contacté » ou « perdu » ; les autres statuts découlent des devis';
     end if;
+    if new.essai and (public.appel_utilisateur() or new.client_id is not null) then
+      raise exception 'Prospect d''essai : création réservée aux essais autorisés, sans client existant';
+    end if;
     return new;
+  end if;
+
+  if new.essai is distinct from old.essai then
+    raise exception 'Le caractère « essai » d''un prospect ne change jamais';
+  end if;
+  if old.essai and public.appel_utilisateur() then
+    raise exception 'Prospect d''essai : modifiable uniquement par les essais autorisés (clé secrète)';
   end if;
 
   select exists (select 1 from public.devis where prospect_id = new.id and statut = 'accepte'),
@@ -892,10 +1073,34 @@ begin
   if not found then
     raise exception 'Devis introuvable';
   end if;
+  if not exists (select 1 from public.projets where devis_id = v_source.id) then
+    raise exception 'Le devis accepté n''a pas de projet : avenant impossible';
+  end if;
   insert into public.devis (prospect_id, regime_tva, territoire_tva, pays_tva, taux_tva, mention_tva,
                             criteres_tva, avenant_du_devis_id)
   values (v_source.prospect_id, v_source.regime_tva, v_source.territoire_tva, v_source.pays_tva,
           v_source.taux_tva, v_source.mention_tva, v_source.criteres_tva, v_source.id)
+  returning id into v_id;
+  return v_id;
+end
+$$;
+
+-- Essais autorisés : seul moyen de créer un prospect d'essai (et donc des devis d'essai, numérotés
+-- ESSAI-DEV, marqués « ESSAI — SANS VALEUR », clients et projets préfixés [ESSAI]).
+create or replace function public.creer_prospect_essai(p_nom text, p_societe text, p_adresse text,
+                                                       p_code_postal text, p_ville text, p_pays text)
+returns uuid
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_id uuid;
+begin
+  if public.appel_utilisateur() then
+    raise exception 'Réservé aux essais autorisés (clé secrète)';
+  end if;
+  insert into public.prospects (nom, societe, adresse, code_postal, ville, pays, essai)
+  values ('[ESSAI] ' || p_nom, '[ESSAI] ' || p_societe, p_adresse, p_code_postal, p_ville, p_pays, true)
   returning id into v_id;
   return v_id;
 end
@@ -912,7 +1117,9 @@ begin
     'emettre_devis(uuid, uuid, jsonb, text)', 'enregistrer_pdf_devis(uuid, text, text, bigint)',
     'signaler_echec_pdf_devis(uuid, text)', 'declarer_envoi_devis(uuid, uuid, timestamptz, text, text)',
     'decider_devis(uuid, uuid, text)', 'creer_nouvelle_version_devis(uuid, uuid)',
-    'creer_avenant_devis(uuid, uuid)'] loop
+    'creer_avenant_devis(uuid, uuid)', 'appel_utilisateur()', 'controle_emetteur(jsonb)',
+    'controle_destinataire(uuid)', 'controle_cumul_avenants(uuid, uuid, numeric)',
+    'creer_prospect_essai(text, text, text, text, text, text)'] loop
     execute format('revoke all on function public.%s from public, anon, authenticated', v_fonction);
     execute format('grant execute on function public.%s to service_role', v_fonction);
   end loop;
@@ -963,8 +1170,10 @@ revoke insert, update on public.devis_lignes from authenticated;
 grant insert (devis_id, designation, quantite, prix_unitaire) on public.devis_lignes to authenticated;
 grant update (designation, quantite, prix_unitaire) on public.devis_lignes to authenticated;
 revoke insert, update on public.prospects from authenticated;
-grant insert (nom, societe, email, telephone, source, statut, client_id) on public.prospects to authenticated;
-grant update (nom, societe, email, telephone, source, statut, client_id) on public.prospects to authenticated;
+grant insert (nom, societe, email, telephone, source, statut, client_id, adresse, code_postal, ville, pays)
+  on public.prospects to authenticated;
+grant update (nom, societe, email, telephone, source, statut, client_id, adresse, code_postal, ville, pays)
+  on public.prospects to authenticated;
 
 -- 7c. Consultation par le collaborateur : vues à colonnes explicites, lecture seule.
 --     Ni coordonnées des prospects, ni table clients, ni critères fiscaux (n° TVA du client),
@@ -974,14 +1183,14 @@ drop view if exists public.commercial_devis;
 drop view if exists public.commercial_devis_lignes;
 
 create view public.commercial_prospects with (security_barrier = true) as
-  select p.id, p.nom, p.societe, p.source, p.statut, p.created_at
+  select p.id, p.nom, p.societe, p.source, p.statut, p.essai, p.created_at
     from public.prospects p
    where (select public.mon_role()) in ('admin', 'manager', 'collaborateur');
 
 create view public.commercial_devis with (security_barrier = true) as
   select d.id, d.prospect_id, d.numero, d.date_emission, d.statut, d.total_ht, d.tva, d.total_ttc,
          d.regime_tva, d.territoire_tva, d.pays_tva, d.taux_tva, d.mention_tva, d.date_envoi, d.canal_envoi,
-         d.remplace_devis_id, d.avenant_du_devis_id, d.created_at
+         d.remplace_devis_id, d.avenant_du_devis_id, d.essai, d.created_at
     from public.devis d
    where (select public.mon_role()) in ('admin', 'manager', 'collaborateur');
 
@@ -1013,6 +1222,16 @@ declare
   v_numero text;
   v_numero2 text;
   v_ok boolean;
+  v_compteurs_avant text;
+  v_compteurs_apres text;
+  v_sequences_avant text;
+  v_sequences_apres text;
+  v_lignes_avant text;
+  v_lignes_apres text;
+  v_emetteur constant jsonb := '{"raison_sociale":"AUTOTEST","forme_juridique":"SAS","capital_social":"1",
+    "adresse":"1 rue de l''Essai","code_postal":"97200","ville":"Fort-de-France","siret":"00000000000000",
+    "immatriculation":"RCS essai","tva_intracom":"FR00000000000","validite_jours":"30",
+    "assurance_assureur":"essai","assurance_contrat":"essai","assurance_couverture":"essai"}';
 begin
   -- Inventaire des fonctions exécutables avec un jeton : toujours les 4 fonctions d'identité.
   select string_agg(p.proname, ', ' order by p.proname) into v_liste
@@ -1059,7 +1278,8 @@ begin
     from information_schema.columns
    where table_schema = 'public' and table_name like 'commercial\_%'
      and column_name in ('email', 'telephone', 'client_id', 'criteres_tva', 'envoi_destinataire',
-                         'instantane_emission', 'pdf_chemin', 'taux_horaire');
+                         'instantane_emission', 'pdf_chemin', 'pdf_empreinte', 'taux_horaire', 'adresse',
+                         'code_postal', 'ville', 'emis_par', 'envoi_declare_par', 'decision_par');
   if v_liste is not null then
     raise exception 'Commercial : colonnes sensibles exposées au collaborateur : %', v_liste;
   end if;
@@ -1080,11 +1300,19 @@ begin
     raise exception 'Commercial : bucket privé « devis » absent';
   end if;
 
-  -- Essai complet, annulé à la fin (aucune trace, aucun numéro réel consommé).
+  -- Essai complet, annulé à la fin. Empreinte AVANT : compteurs (clé=valeur), valeur courante de
+  -- toutes les séquences du schéma public, nombre de lignes des tables touchées.
+  select coalesce(string_agg(cle || '=' || valeur, ',' order by cle), '') into v_compteurs_avant from public.compteurs;
+  select coalesce(string_agg(schemaname || '.' || sequencename || '=' || coalesce(last_value, 0), ',' order by sequencename), '')
+    into v_sequences_avant from pg_sequences where schemaname not in ('pg_catalog', 'information_schema');
+  select (select count(*) from public.clients) || '/' || (select count(*) from public.projets) || '/'
+         || (select count(*) from public.prospects) || '/' || (select count(*) from public.devis) || '/'
+         || (select count(*) from public.devis_lignes) || '/' || (select count(*) from storage.objects)
+    into v_lignes_avant;
   select id into v_admin from public.profiles where role = 'admin' limit 1;
   begin
-    insert into public.prospects (nom, societe, email) values ('Autotest', 'Autotest SARL', 'autotest@exemple.invalid')
-      returning id into v_prospect;
+    v_prospect := public.creer_prospect_essai('Autotest', 'Autotest SARL', '1 rue de l''Essai', '97200',
+                                              'Fort-de-France', 'MQ');
     insert into public.devis (prospect_id) values (v_prospect) returning id into v_devis;
     insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire)
       values (v_devis, 'Étude', 3, 100.333), (v_devis, 'Visite', 1, 0);
@@ -1096,8 +1324,14 @@ begin
       raise exception 'AUTOTEST: totaux du brouillon incorrects';
     end if;
 
-    v_numero := public.emettre_devis(v_devis, v_admin, '{"raison_sociale":"Autotest"}', 'v1');
-    v_numero2 := public.emettre_devis(v_devis, v_admin, '{"raison_sociale":"Autotest"}', 'v1');
+    begin
+      perform public.emettre_devis(v_devis, v_admin, '{"raison_sociale":"Autotest"}', 'v1');
+      raise exception 'AUTOTEST: émission acceptée avec des coordonnées incomplètes';
+    exception when others then
+      if sqlerrm like 'AUTOTEST:%' then raise; end if;
+    end;
+    v_numero := public.emettre_devis(v_devis, v_admin, v_emetteur, 'v1');
+    v_numero2 := public.emettre_devis(v_devis, v_admin, v_emetteur, 'v1');
     if v_numero is null or v_numero not like 'ESSAI-DEV-%' or v_numero2 <> v_numero then
       raise exception 'AUTOTEST: numérotation incorrecte (% / %)', v_numero, v_numero2;
     end if;
@@ -1152,14 +1386,22 @@ begin
     end if;
   end;
 
-  -- L'essai n'a rien laissé : ni prospect, ni compteur d'essai.
-  select count(*) into v_nb from public.prospects where email = 'autotest@exemple.invalid';
-  if v_nb <> 0 then
-    raise exception 'Commercial : l''autotest a laissé des données';
+  -- Empreinte APRÈS : identique, sinon le déploiement échoue (et rien n'est appliqué).
+  select coalesce(string_agg(cle || '=' || valeur, ',' order by cle), '') into v_compteurs_apres from public.compteurs;
+  select coalesce(string_agg(schemaname || '.' || sequencename || '=' || coalesce(last_value, 0), ',' order by sequencename), '')
+    into v_sequences_apres from pg_sequences where schemaname not in ('pg_catalog', 'information_schema');
+  select (select count(*) from public.clients) || '/' || (select count(*) from public.projets) || '/'
+         || (select count(*) from public.prospects) || '/' || (select count(*) from public.devis) || '/'
+         || (select count(*) from public.devis_lignes) || '/' || (select count(*) from storage.objects)
+    into v_lignes_apres;
+  if v_compteurs_apres is distinct from v_compteurs_avant then
+    raise exception 'Commercial : l''autotest a modifié les compteurs (% → %)', v_compteurs_avant, v_compteurs_apres;
   end if;
-  select count(*) into v_nb from public.compteurs where cle like 'essai_devis_%';
-  if v_nb <> 0 then
-    raise exception 'Commercial : la numérotation n''est pas annulée avec la transaction';
+  if v_sequences_apres is distinct from v_sequences_avant then
+    raise exception 'Commercial : l''autotest a fait avancer une séquence (% → %)', v_sequences_avant, v_sequences_apres;
+  end if;
+  if v_lignes_apres is distinct from v_lignes_avant then
+    raise exception 'Commercial : l''autotest a laissé des lignes (% → %)', v_lignes_avant, v_lignes_apres;
   end if;
 end
 $$;
