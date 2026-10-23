@@ -128,6 +128,18 @@ function nombre(d: FormData, cle: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// Colonnes de la base : quantite numeric(10,2), prix_unitaire numeric(12,2). Une 3e décimale serait
+// arrondie en silence par la base : on la refuse ici avec un message clair.
+function controleLigne(d: FormData): string | null {
+  const deuxDecimales = /^-?[0-9]+([.,][0-9]{1,2})?$/;
+  const q = texte(d, "quantite") ?? "", p = texte(d, "prix_unitaire") ?? "";
+  if (!deuxDecimales.test(q)) return "Quantité : nombre avec au plus 2 décimales (ex. 1,5).";
+  if (!deuxDecimales.test(p)) return "Prix unitaire : montant avec au plus 2 décimales (ex. 100,33).";
+  if (Math.abs(Number(q.replace(",", "."))) >= 1e8) return "Quantité trop élevée.";
+  if (Math.abs(Number(p.replace(",", "."))) >= 1e10) return "Prix unitaire trop élevé.";
+  return null;
+}
+
 export async function ajouterLigne(_e: EtatAction, d: FormData): Promise<EtatAction> {
   await exigerCommercial();
   const devisId = String(d.get("devis_id") ?? "");
@@ -136,6 +148,8 @@ export async function ajouterLigne(_e: EtatAction, d: FormData): Promise<EtatAct
   if (!texte(d, "designation") || quantite === null || prix === null) {
     return erreur("Désignation, quantité et prix unitaire sont obligatoires.");
   }
+  const refus = controleLigne(d);
+  if (refus) return erreur(refus);
   const supabase = await creerClientServeur();
   const { error } = await supabase
     .from("devis_lignes")
@@ -151,6 +165,8 @@ export async function modifierLigne(_e: EtatAction, d: FormData): Promise<EtatAc
   const quantite = nombre(d, "quantite");
   const prix = nombre(d, "prix_unitaire");
   if (!texte(d, "designation") || quantite === null || prix === null) return erreur("Ligne incomplète.");
+  const refus = controleLigne(d);
+  if (refus) return erreur(refus);
   const supabase = await creerClientServeur();
   const { data, error } = await supabase
     .from("devis_lignes")

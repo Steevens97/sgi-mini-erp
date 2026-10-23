@@ -505,6 +505,24 @@ set role authenticated;
 select essai.refus('attribuer_numero non appelable avec un jeton', $q$select public.attribuer_numero('devis','DEV')$q$);
 reset role;
 
+-- ===================== Schéma réel (diagnostic du 23/10/2026) =====================
+select essai.qui('aaaaaaaa-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000002');
+set role authenticated;
+select essai.refus('suppression d''un prospect ayant un devis émis refusée (la cascade ne contourne pas la règle)',
+  $q$delete from public.prospects where id = 'cccccccc-0000-0000-0000-000000000001'$q$);
+reset role;
+select essai.ok('ce prospect et ses devis sont intacts',
+  (select count(*) > 0 from public.devis where prospect_id = 'cccccccc-0000-0000-0000-000000000001'));
+insert into public.devis (id, prospect_id, regime_tva, territoire_tva, taux_tva, criteres_tva, type_mission)
+values ('dddddddd-0000-0000-0000-0000000000f1', 'cccccccc-0000-0000-0000-000000000001', 'taxable', 'MQ', 8.5,
+        '{"nature_mission":"prestation_intellectuelle","statut_client":"assujetti_france"}', 'conseil');
+insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire)
+values ('dddddddd-0000-0000-0000-0000000000f1', 'Demi-journée', 0.5, 333.33), ('dddddddd-0000-0000-0000-0000000000f1', 'Forfait', 0.33, 100.01);
+select essai.ok('quantités fractionnaires : 0,5 × 333,33 = 166,665 → 166,67 ; 0,33 × 100,01 → 33,00 ; TVA 8,5 % → 16,97',
+  (select total_ht = 199.67 and tva = 16.97 and total_ttc = 216.64 from public.devis where id = 'dddddddd-0000-0000-0000-0000000000f1'),
+  (select total_ht || ' / ' || tva || ' / ' || total_ttc from public.devis where id = 'dddddddd-0000-0000-0000-0000000000f1'));
+delete from public.devis where id = 'dddddddd-0000-0000-0000-0000000000f1';
+
 -- ===================== Nettoyage des essais =====================
 create table essai.avant_nettoyage as
   select (select count(*) from public.devis where not essai) as devis_reels,

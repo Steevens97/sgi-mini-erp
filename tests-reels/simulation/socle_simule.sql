@@ -60,16 +60,24 @@ create table public.prospects (
   telephone text, source text,
   statut text not null default 'contacte' check (statut in ('contacte','devis_envoye','gagne','perdu')),
   client_id uuid references public.clients(id), created_at timestamptz not null default now());
+-- devis et devis_lignes : définitions EXACTES relevées dans Supabase le 23/10/2026
+-- (tests-reels/diagnostic_totaux_devis.sql) : précisions numeric(12,2)/(10,2), UNIQUE (numero), cascades.
 create table public.devis (
-  id uuid primary key default gen_random_uuid(), prospect_id uuid not null references public.prospects(id),
+  id uuid not null default gen_random_uuid(), prospect_id uuid not null,
   numero text, date_emission date not null default current_date,
-  statut text not null default 'brouillon' check (statut in ('brouillon','envoye','accepte','refuse')),
-  total_ht numeric not null default 0, tva numeric not null default 0, total_ttc numeric not null default 0,
-  created_at timestamptz not null default now());
+  statut text not null default 'brouillon',
+  total_ht numeric(12,2) not null default 0, tva numeric(12,2) not null default 0, total_ttc numeric(12,2) not null default 0,
+  created_at timestamptz not null default now(),
+  constraint devis_pkey primary key (id),
+  constraint devis_numero_key unique (numero),
+  constraint devis_prospect_id_fkey foreign key (prospect_id) references public.prospects(id) on delete cascade,
+  constraint devis_statut_check check (statut = any (array['brouillon'::text, 'envoye'::text, 'accepte'::text, 'refuse'::text])));
 create table public.devis_lignes (
-  id uuid primary key default gen_random_uuid(), devis_id uuid not null references public.devis(id) on delete cascade,
-  designation text not null, quantite numeric not null default 1, prix_unitaire numeric not null default 0,
-  montant_ht numeric not null default 0, created_at timestamptz not null default now());
+  id uuid not null default gen_random_uuid(), devis_id uuid not null,
+  designation text not null, quantite numeric(10,2) not null default 1, prix_unitaire numeric(12,2) not null default 0,
+  montant_ht numeric(12,2) not null default 0, created_at timestamptz not null default now(),
+  constraint devis_lignes_pkey primary key (id),
+  constraint devis_lignes_devis_id_fkey foreign key (devis_id) references public.devis(id) on delete cascade);
 create table public.collaborateurs (
   id uuid primary key default gen_random_uuid(), nom text not null, prenom text, email text, poste text,
   date_entree date, manager_id uuid references public.collaborateurs(id),

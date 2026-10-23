@@ -1433,18 +1433,48 @@ begin
          || (select count(*) from public.devis_lignes) || '/' || (select count(*) from storage.objects)
     into v_lignes_avant;
   select id into v_admin from public.profiles where role = 'admin' limit 1;
+  -- Précision des colonnes de montants relevée dans Supabase le 23/10/2026 (diagnostic_totaux_devis.sql) :
+  -- les calculs et l'autotest la supposent ; si elle change, le déploiement s'arrête pour réexamen.
+  select string_agg(table_name || '.' || column_name || '='
+                    || coalesce(numeric_precision || ',' || numeric_scale, 'sans précision fixée'), ' '
+                    order by table_name, column_name)
+    into v_liste
+    from information_schema.columns
+   where table_schema = 'public'
+     and (table_name, column_name) in (('devis', 'total_ht'), ('devis', 'tva'), ('devis', 'total_ttc'),
+                                       ('devis_lignes', 'quantite'), ('devis_lignes', 'prix_unitaire'),
+                                       ('devis_lignes', 'montant_ht'));
+  if v_liste is distinct from 'devis.total_ht=12,2 devis.total_ttc=12,2 devis.tva=12,2 devis_lignes.montant_ht=12,2 '
+                              'devis_lignes.prix_unitaire=12,2 devis_lignes.quantite=10,2' then
+    raise exception 'Commercial : précision des montants différente de celle examinée (%) ; nouvel examen nécessaire',
+      coalesce(v_liste, 'colonnes absentes');
+  end if;
+
   begin
     v_prospect := public.creer_prospect_essai('Autotest', 'Autotest SARL', '1 rue de l''Essai', '97200',
                                               'Fort-de-France', 'MQ');
     insert into public.devis (prospect_id) values (v_prospect) returning id into v_devis;
     insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire)
-      values (v_devis, 'Étude', 3, 100.333), (v_devis, 'Visite', 1, 0);
+      values (v_devis, 'Étude', 0.33, 100.01), (v_devis, 'Visites', 3, 100.33), (v_devis, 'Gratuit', 1, 0);
+    -- Les valeurs d'essai tiennent dans les colonnes (2 décimales) : aucune n'a été arrondie à l'enregistrement.
+    select count(*) = 3 and bool_and((quantite, prix_unitaire) in ((0.33, 100.01), (3, 100.33), (1, 0)))
+      into v_ok from public.devis_lignes where devis_id = v_devis;
+    if not v_ok then
+      raise exception 'AUTOTEST: valeurs d''essai modifiées à l''enregistrement des lignes';
+    end if;
+    -- Arrondi de ligne : 0,33 × 100,01 = 33,0033 → 33,00 ; 3 × 100,33 = 300,99.
+    select string_agg(montant_ht::text, ' ' order by montant_ht) into v_liste from public.devis_lignes where devis_id = v_devis;
+    if v_liste is distinct from '0.00 33.00 300.99' then
+      raise exception 'AUTOTEST: montants de ligne incorrects (%)', v_liste;
+    end if;
     update public.devis set regime_tva = 'taxable', territoire_tva = 'MQ', taux_tva = 8.5, type_mission = 'conseil',
            criteres_tva = '{"nature_mission":"prestation_intellectuelle","statut_client":"assujetti_france"}'
      where id = v_devis;
-    select total_ht = 301.00 and tva = 25.59 and total_ttc = 326.59 into v_ok from public.devis where id = v_devis;
+    -- Totaux : HT 333,99 ; TVA 8,5 % = 28,38915 → 28,39 ; TTC 362,38.
+    select total_ht = 333.99 and tva = 28.39 and total_ttc = 362.38, total_ht || ' / ' || tva || ' / ' || total_ttc
+      into v_ok, v_liste from public.devis where id = v_devis;
     if not v_ok then
-      raise exception 'AUTOTEST: totaux du brouillon incorrects';
+      raise exception 'AUTOTEST: totaux du brouillon incorrects (HT / TVA / TTC obtenus : %)', v_liste;
     end if;
 
     begin
@@ -1478,7 +1508,7 @@ begin
       raise exception 'AUTOTEST: prospect non passé à « devis envoyé »';
     end if;
     v_version := public.creer_nouvelle_version_devis(v_devis, v_admin);
-    if (select count(*) from public.devis_lignes where devis_id = v_version) <> 2 then
+    if (select count(*) from public.devis_lignes where devis_id = v_version) <> 3 then
       raise exception 'AUTOTEST: nouvelle version sans ses lignes';
     end if;
     delete from public.devis where id = v_version;

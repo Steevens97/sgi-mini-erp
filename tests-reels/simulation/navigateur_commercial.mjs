@@ -111,6 +111,16 @@ try {
     await m.reload();
   }
   verifier("totaux calculés par la base affichés (1 338,17 € TTC)", (await m.locator("text=Total TTC : 1 338,17 €").count()) === 1);
+  // Colonnes à 2 décimales : un prix à 3 décimales est refusé avec un message, jamais arrondi en silence.
+  const lignesAvant = sql(`select count(*) from public.devis_lignes where devis_id = '${devisId}'`);
+  await m.fill("input[placeholder='Désignation']", "Prix trop précis");
+  await m.fill("input[placeholder='Qté']", "1");
+  await m.fill("input[placeholder='P.U. HT']", "100,333");
+  await m.click("button:has-text('Ajouter la ligne')");
+  await attendre(m, "au plus 2 décimales");
+  verifier("prix à 3 décimales refusé avec un message, aucune ligne ajoutée",
+    sql(`select count(*) from public.devis_lignes where devis_id = '${devisId}'`) === lignesAvant);
+  await m.reload();
 
   const apercu = await m.request.get(B + `/commercial/devis/${devisId}/pdf`);
   const apercuPdf = await apercu.body();

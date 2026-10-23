@@ -111,6 +111,17 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   29c13b6 (git revert, historique conservé ; contenu = d1876d4). Vérifié : 44/44 écran Utilisateurs,
   135/135 verrouillage, données identiques. Cause recherchée avec `tests-reels/diagnostic_totaux_devis.sql`
   (lecture seule, exécutée par l'utilisateur dans le SQL Editor ; jamais de diagnostic publié sur GitHub).
+- CAUSE ÉTABLIE (diagnostic exécuté par l'utilisateur) : aucun déclencheur ni fonction préexistants sur
+  devis/devis_lignes ; colonnes réelles `quantite numeric(10,2)`, `prix_unitaire|montant_ht|total_ht|tva|
+  total_ttc numeric(12,2)`, `UNIQUE (numero)`, `devis.prospect_id` et `devis_lignes.devis_id` ON DELETE CASCADE.
+  L'autotest saisissait 100,333 € → stocké 100,33 € → 300,99 ≠ 301,00. Reproduit à l'identique localement.
+  Correction : socle simulé aligné EXACTEMENT ; autotest avec des valeurs à 2 décimales qui testent toujours
+  l'arrondi (0,33 × 100,01 → 33,00), + contrôle « valeurs non modifiées à l'enregistrement », + contrôle des
+  montants de ligne, + contrôle de la précision des 6 colonnes (le déploiement s'arrête si elle change).
+  Prouvé : l'autotest échoue sur l'ancien socle, sur un arrondi de ligne faussé et sur une TVA tronquée.
+  Application : prix/quantité à plus de 2 décimales refusés avec un message (la base arrondirait en silence).
+  Les autres tables (prospects, clients, projets, factures, compteurs, temps, collaborateurs) restent à
+  relever avec `tests-reels/diagnostic_tables.sql` (lecture seule) AVANT la nouvelle tentative.
 - ORDRE DE DÉPLOIEMENT : 1) commit sur `main` contenant UNIQUEMENT la migration (le code en ligne reste
   compatible) ; 2) attendre « Supabase Preview » vert ET la version dans migrations_appliquees() ;
   3) seulement ensuite publier le code qui en dépend. Comme 92ba664 a été annulé, la nouvelle tentative
@@ -176,14 +187,14 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 
 ### Tests (base d'ESSAI locale, jamais Supabase) — résultats du 23/10/2026
 - `tests-reels/simulation/rejouer.sh tests-reels/simulation/tests_commercial.sql` puis
-  `select count(*) filter (where ok), count(*) from essai.resultats` : 123/123.
+  `select count(*) filter (where ok), count(*) from essai.resultats` : 134/134.
 - `tests_concurrence.sh` : 17/17. `test_numerotation_piegee.sh` : refus par empreinte, rien appliqué.
 - Passage d'année : 2e grappe libfaketime `/var/tmp/pg-faketime` (port 5498),
   `PORT_ESSAI=5498 rejouer.sh test_passage_annee.sql`.
 - `postgrest_local.sh start` + `python3 -I tests_vues_api.py` : 30/30 (puis `postgrest_local.sh stop`).
 - `node --experimental-strip-types tests-reels/tests_pdf_archivage.mts` : 14/14.
 - Navigateur : `pile_locale.sh start`, build avec l'URL 127.0.0.1:54321, `navigateur_commercial.mjs`
-  (modes simulation 25/25, limite 2/2, reel 4/4 — le mode reel exige un brouillon réel « conseil »).
+  (modes simulation 26/26, limite 2/2, reel 4/4 — le mode reel exige un brouillon réel « conseil »).
 - Production (après déploiement) : `tests_verrouillage.py` détecte le module (migrations_appliquees) et
   vérifie les droits Commercial en plus des contrôles d'origine ; `parcours_essai_commercial.mjs <url>`
   (Playwright, depuis scratchpad/essais) : parcours complet avec données d'essai, nettoyage intégré.
