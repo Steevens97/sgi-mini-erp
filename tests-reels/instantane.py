@@ -9,10 +9,14 @@ def get(chemin, methode="GET", corps=None):
         headers={"apikey": S, "Authorization": f"Bearer {S}", "Content-Type": "application/json"})
     with urllib.request.urlopen(req, context=CTX, timeout=20) as r: return json.loads(r.read())
 res = {}
+residus = 0
 for t in TABLES:
     lignes = get(f"/rest/v1/{t}?select=*")
-    lignes = [l for l in lignes if "exemple.invalid" not in json.dumps(l)]  # ignore les jetables
+    jetables = [l for l in lignes if "exemple.invalid" in json.dumps(l) or "[ESSAI]" in json.dumps(l)]
+    residus += len(jetables)  # comptés à part : un essai mal nettoyé ne doit jamais passer inaperçu
+    lignes = [l for l in lignes if l not in jetables]
     res[t] = (len(lignes), hashlib.sha256(json.dumps(sorted(lignes, key=lambda x: json.dumps(x, sort_keys=True)), sort_keys=True).encode()).hexdigest()[:12])
+res["résidus d'essai"] = (residus, "-")  # attendu : 0 en dehors d'un test en cours
 res["bucket justificatifs"] = (len(get("/storage/v1/object/list/justificatifs", "POST", {"prefix": "", "limit": 1000})), "-")
 json.dump(res, open(sys.argv[1], "w"))
 for k, v in res.items(): print(f"  {k:22s} {v[0]:4d} ligne(s)  empreinte {v[1]}")
