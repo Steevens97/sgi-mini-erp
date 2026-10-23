@@ -101,7 +101,13 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   DEFINER ; RLS profiles/collaborateurs ; trigger anti-auto-rétrogradation). 42/42 contrôles API +
   test navigateur sur https://sgi-mini-erp.vercel.app (anonyme, collaborateur, orphelin, manager, admin).
   Comptes jetables : domaine @exemple.invalid, supprimés après tests ; ne jamais toucher sgi@gmx.fr.
-- Étape 5 : écran Utilisateurs ; puis comptes de test manager + collaborateur, reconnexion en collaborateur.
+- Étape 5 FAITE (code) : migration 20261023110000 (trigger « dernier admin » sur profiles, update et delete) ;
+  écran /utilisateurs (exigerAdmin dans chaque action, refus sur soi, sur COMPTES_PROTEGES = sgi@gmx.fr,
+  et sur le dernier admin) ; mot de passe provisoire affiché une fois, jamais journalisé ;
+  changement obligatoire via app_metadata.doit_changer_mot_de_passe (proxy + /changer-mot-de-passe) ;
+  révocation = suppression du compte auth (profil supprimé en cascade, fiche conservée).
+  Tests : 44/44 écran (local + en ligne), 42/42 RLS. Reste : l'utilisateur crée sa fiche, puis un manager
+  et un collaborateur, et se reconnecte en collaborateur.
 
 ## Tests locaux dans le conteneur cloud
 - Le serveur Node doit passer par le proxy : lancer avec
