@@ -104,6 +104,80 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 - Tests : `tests-reels/tests_verrouillage.py` + `instantane.py` (empreinte des données) à relancer après
   chaque module.
 
+## Module Commercial (migration 20261024100000) — PRÉPARÉ sur la branche `preparation-commercial`, NON DÉPLOYÉ
+- Ne jamais fusionner dans `main` sans l'accord explicite de l'utilisateur (fusion = déploiement).
+
+### Arbitrages DÉFINITIFS de l'utilisateur (23/10/2026) — ne plus les redemander
+- `devis.type_mission` approuvé (conseil, amo, moex, opc, donnees, drone, autre).
+- TVA : Martinique 8,5 % par défaut ; France métropolitaine et autres pays de l'UE gérés.
+- `devis.tva` = MONTANT de TVA en euros (pas un taux ; le taux est dans `taux_tva`).
+- Un devis accepté ne passe jamais à « refusé » (ni à « remplacé ») : on fait un avenant.
+- Évolutions A–F approuvées, numérotation à l'émission ; colonnes d'adresse du prospect approuvées.
+- Données de démonstration (dont Cabinet Fabre) : inchangées.
+
+### Numérotation (définition réelle de `prochain_numero` examinée le 23/10/2026)
+- `prochain_numero(p_cle, p_prefixe)` : SECURITY INVOKER, clé = `p_cle || '_' || AAAA` (année de
+  `current_date`), `insert … on conflict do nothing` puis `update … returning` → transactionnelle
+  (annulation = numéro rendu ; appels simultanés sérialisés). Format `PREFIXE-AAAA-NNNN` (`lpad` 4).
+- La migration vérifie l'EMPREINTE de cette définition (md5 du texte normalisé) et ÉCHOUE si elle a changé.
+- Ne jamais appeler `prochain_numero` directement : passer par `attribuer_numero(p_cle, p_prefixe)`
+  (service_role seulement), qui : n'accepte que les clés prévues (`devis`, `essai_devis` ; ajouter
+  `facture` au module Finance) ; fixe `timezone = America/Martinique` pour la SEULE durée de l'appel
+  (la session n'est pas modifiée ; prouvé avec libfaketime : 2026-12-31 22:30 en Martinique → DEV-2026) ;
+  bloque AVANT dépassement : à 9 999, refus avec « Numérotation impossible : la limite de 9 999
+  documents « DEV » pour l'année AAAA est atteinte… » (sinon `lpad` tronquerait → doublons).
+  Même limite pour les futures factures.
+- Devis réel : `attribuer_numero('devis','DEV')` → DEV-AAAA-NNNN. Devis d'essai :
+  `attribuer_numero('essai_devis','ESSAI-DEV')` → compteur `essai_devis_AAAA`, jamais le compteur réel.
+- Numérotation sans trou garantie SEULEMENT si : numéro attribué dans la transaction d'émission
+  (déclencheur), un devis émis ne se supprime pas, et personne n'appelle `prochain_numero` hors de ces
+  opérations (la clé secrète le pourrait : ne jamais le faire, même pour tester).
+
+### Règles
+- Statuts du devis : brouillon → emis → envoye → accepte | refuse ; emis|envoye → remplace (à l'émission
+  de la nouvelle version) ; un devis accepté ne se remplace pas : avenant. Tout est imposé par
+  déclencheurs (aussi depuis le tableau de bord). Numéro, statut, totaux, instantané : écrits par la base.
+- Essais : indicateur `essai` (prospects, devis) posé uniquement par `creer_prospect_essai` (clé secrète),
+  non modifiable ; l'email ne joue aucun rôle. Clients/projets d'essai préfixés [ESSAI], PDF « ESSAI — SANS VALEUR ».
+  Un devis d'essai n'est modifiable qu'avec la clé secrète (à l'écran : lecture seule, sauf « Régénérer le PDF »).
+- Nettoyage : `supprimer_essais_commercial()` (clé secrète) supprime prospects, devis (tous statuts), lignes,
+  projets et clients d'ESSAI et le compteur essai_devis ; refuse tout si une donnée réelle y est rattachée
+  (temps saisi, facture, devis réel lié…) ; renvoie `pdf_chemins` à supprimer du bucket `devis`.
+  Seule exception à « un devis émis ne se supprime pas » : devis d'essai, clé secrète.
+- Destinataire : `prospects.adresse, code_postal, ville, pays` obligatoires à l'émission, figés dans
+  `instantane_emission`.
+- Émetteur : `src/lib/entreprise.ts` (COORDONNEES_SG_INGENIERIE, VIDES tant que l'utilisateur ne les a pas
+  fournies) ; `controle_emetteur` bloque en base ; coordonnées [DÉMO] interdites sur un devis réel ;
+  coordonnées « SIMULATION LOCALE » seulement si l'URL Supabase est 127.0.0.1 et SIMULATION_LOCALE=1.
+- Assurance exigée selon OBLIGATIONS_ASSURANCE (à fournir par l'utilisateur/l'assureur ; « a_confirmer »
+  bloque l'émission) ; MOEx = décennale obligatoire, imposée en base. Aucune couverture inventée.
+  À l'écran (formulaire et fiche devis) : « Assurance : couverture à vérifier selon la mission et le contrat. »
+  (MENTION_ASSURANCE) — l'étiquette de mission n'est jamais présentée comme une validation.
+- TVA : 6 champs (devis, factures), `controle_traitement_tva` par déclencheur ; proposition affichée,
+  jamais appliquée seule ; taux réduit/personnalisé = justification ; mentions sourcées seulement
+  (« Autoliquidation », « TVA non applicable – art. 294 du CGI »), le reste saisi par l'utilisateur.
+- Avenants : lignes négatives permises ; cumul mission (initial + avenants acceptés) >= 0, vérifié à
+  l'émission et à l'acceptation APRÈS verrou du devis initial (prouvé : sans verrou, -400 €).
+- PDF : pdf-lib, gabarit `devis-v1` jamais modifié ; généré depuis l'instantané ; archivé une fois dans le
+  bucket privé `devis` (clé secrète) ; le fichier stocké fait foi (reprise, concurrence) ; téléchargement
+  vérifié par SHA-256 ; brouillon généré à la volée, jamais stocké. Le collaborateur n'a pas accès aux PDF.
+- Droits : admin/manager sur prospects, devis, lignes (droits de colonnes) ; clients lecture admin/manager,
+  écriture admin ; collaborateur via vues `commercial_prospects|devis|devis_lignes` (colonnes explicites).
+
+### Tests (base d'ESSAI locale, jamais Supabase) — résultats du 23/10/2026
+- `tests-reels/simulation/rejouer.sh tests-reels/simulation/tests_commercial.sql` puis
+  `select count(*) filter (where ok), count(*) from essai.resultats` : 123/123.
+- `tests_concurrence.sh` : 17/17. `test_numerotation_piegee.sh` : refus par empreinte, rien appliqué.
+- Passage d'année : 2e grappe libfaketime `/var/tmp/pg-faketime` (port 5498),
+  `PORT_ESSAI=5498 rejouer.sh test_passage_annee.sql`.
+- `postgrest_local.sh start` + `python3 -I tests_vues_api.py` : 30/30 (puis `postgrest_local.sh stop`).
+- `node --experimental-strip-types tests-reels/tests_pdf_archivage.mts` : 14/14.
+- Navigateur : `pile_locale.sh start`, build avec l'URL 127.0.0.1:54321, `navigateur_commercial.mjs`
+  (modes simulation 25/25, limite 2/2, reel 4/4 — le mode reel exige un brouillon réel « conseil »).
+- Production (après déploiement) : `tests_verrouillage.py` détecte le module (migrations_appliquees) et
+  vérifie les droits Commercial en plus des contrôles d'origine ; `parcours_essai_commercial.mjs <url>`
+  (Playwright, depuis scratchpad/essais) : parcours complet avec données d'essai, nettoyage intégré.
+
 ## Pièges
 - Compte sans `collaborateur_id` = ne voit rien, sans erreur → afficher un avertissement VISIBLE.
 - `SUPABASE_SERVICE_ROLE_KEY` est SECRÈTE : jamais de préfixe `NEXT_PUBLIC_`, jamais commitée,
@@ -143,7 +217,13 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Tests : 44/44 écran (local + en ligne), 42/42 RLS. Reste : l'utilisateur crée sa fiche, puis un manager
   et un collaborateur, et se reconnecte en collaborateur.
 
+- Module Commercial : PRÉPARÉ (branche `preparation-commercial`), non déployé — voir la section dédiée.
+
 ## Tests locaux dans le conteneur cloud
+- Base d'essai PostgreSQL 16 : `/var/tmp/pg-essai` (port 5499), démarrage :
+  `su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D /var/tmp/pg-essai/data -o '-p 5499 -k /var/tmp/pg-essai -c listen_addresses=' -l /var/tmp/pg-essai/log start"`.
+- Ne jamais arrêter un processus par son nom (pkill/pgrep) : la commande se tue elle-même ; utiliser les
+  scripts `*_local.sh` (fichiers pid).
 - Le serveur Node doit passer par le proxy : lancer avec
   `NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt npx next start -p 3100`.
 - Navigateur : Playwright avec `executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"`.
