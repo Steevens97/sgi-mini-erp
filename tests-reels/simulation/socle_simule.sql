@@ -51,15 +51,21 @@ grant usage on schema public to anon, authenticated, service_role;
 alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
 alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
 
--- Les 13 tables (colonnes, défauts et liens relevés sur l'API de Supabase le 23/10/2026)
+-- Les 13 tables. Définitions EXACTES relevées dans Supabase le 23/10/2026 (tests-reels/diagnostic_*.sql,
+-- exécutés par l'utilisateur) pour clients, prospects, devis, devis_lignes, collaborateurs, projets,
+-- factures, temps, compteurs : types et précisions, défauts, noms de contraintes, comportements ON DELETE.
+-- relances, conges, notes_de_frais, profiles : relevés sur l'API seulement (à vérifier avant leurs modules).
 create table public.clients (
-  id uuid primary key default gen_random_uuid(), nom text not null, email_contact text,
-  telephone text, adresse text, created_at timestamptz not null default now());
+  id uuid not null default gen_random_uuid(), nom text not null, email_contact text,
+  telephone text, adresse text, created_at timestamptz not null default now(),
+  constraint clients_pkey primary key (id));
 create table public.prospects (
-  id uuid primary key default gen_random_uuid(), nom text not null, societe text, email text,
-  telephone text, source text,
-  statut text not null default 'contacte' check (statut in ('contacte','devis_envoye','gagne','perdu')),
-  client_id uuid references public.clients(id), created_at timestamptz not null default now());
+  id uuid not null default gen_random_uuid(), nom text not null, societe text, email text,
+  telephone text, source text, statut text not null default 'contacte',
+  client_id uuid, created_at timestamptz not null default now(),
+  constraint prospects_pkey primary key (id),
+  constraint prospects_client_id_fkey foreign key (client_id) references public.clients(id) on delete set null,
+  constraint prospects_statut_check check (statut = any (array['contacte'::text, 'devis_envoye'::text, 'gagne'::text, 'perdu'::text])));
 -- devis et devis_lignes : définitions EXACTES relevées dans Supabase le 23/10/2026
 -- (tests-reels/diagnostic_totaux_devis.sql) : précisions numeric(12,2)/(10,2), UNIQUE (numero), cascades.
 create table public.devis (
@@ -79,28 +85,39 @@ create table public.devis_lignes (
   constraint devis_lignes_pkey primary key (id),
   constraint devis_lignes_devis_id_fkey foreign key (devis_id) references public.devis(id) on delete cascade);
 create table public.collaborateurs (
-  id uuid primary key default gen_random_uuid(), nom text not null, prenom text, email text, poste text,
-  date_entree date, manager_id uuid references public.collaborateurs(id),
-  taux_horaire numeric not null default 0, solde_conges numeric not null default 25,
-  created_at timestamptz not null default now());
+  id uuid not null default gen_random_uuid(), nom text not null, prenom text, email text, poste text,
+  date_entree date, manager_id uuid,
+  taux_horaire numeric(10,2) not null default 0, solde_conges numeric(6,2) not null default 25,
+  created_at timestamptz not null default now(),
+  constraint collaborateurs_pkey primary key (id),
+  constraint collaborateurs_manager_id_fkey foreign key (manager_id) references public.collaborateurs(id) on delete set null);
 create table public.projets (
-  id uuid primary key default gen_random_uuid(), nom text not null, client_id uuid references public.clients(id),
-  devis_id uuid references public.devis(id),
-  statut text not null default 'en_cours' check (statut in ('en_cours','termine','annule')),
-  created_at timestamptz not null default now());
+  id uuid not null default gen_random_uuid(), nom text not null, client_id uuid, devis_id uuid,
+  statut text not null default 'en_cours', created_at timestamptz not null default now(),
+  constraint projets_pkey primary key (id),
+  constraint projets_client_id_fkey foreign key (client_id) references public.clients(id) on delete set null,
+  constraint projets_devis_id_fkey foreign key (devis_id) references public.devis(id) on delete set null,
+  constraint projets_statut_check check (statut = any (array['en_cours'::text, 'termine'::text, 'annule'::text])));
 create table public.factures (
-  id uuid primary key default gen_random_uuid(), client_id uuid not null references public.clients(id),
+  id uuid not null default gen_random_uuid(), client_id uuid not null,
   numero text, date_emission date not null default current_date, date_echeance date,
-  periode_debut date, periode_fin date, total_ht numeric not null default 0, tva numeric not null default 0,
-  total_ttc numeric not null default 0,
-  statut text not null default 'brouillon' check (statut in ('brouillon','emise','envoyee','payee')),
-  date_envoi timestamptz, created_at timestamptz not null default now());
+  periode_debut date, periode_fin date, total_ht numeric(12,2) not null default 0, tva numeric(12,2) not null default 0,
+  total_ttc numeric(12,2) not null default 0, statut text not null default 'brouillon',
+  date_envoi timestamptz, created_at timestamptz not null default now(),
+  constraint factures_pkey primary key (id),
+  constraint factures_numero_key unique (numero),
+  constraint factures_client_id_fkey foreign key (client_id) references public.clients(id) on delete restrict,
+  constraint factures_statut_check check (statut = any (array['brouillon'::text, 'emise'::text, 'envoyee'::text, 'payee'::text])));
 create table public.temps (
-  id uuid primary key default gen_random_uuid(), collaborateur_id uuid not null references public.collaborateurs(id),
-  projet_id uuid not null references public.projets(id), date_saisie date not null default current_date,
-  heures numeric not null, commentaire text,
-  statut text not null default 'brouillon' check (statut in ('brouillon','soumis','valide')),
-  facture_id uuid references public.factures(id), created_at timestamptz not null default now());
+  id uuid not null default gen_random_uuid(), collaborateur_id uuid not null,
+  projet_id uuid not null, date_saisie date not null default current_date,
+  heures numeric(5,2) not null, commentaire text, statut text not null default 'brouillon',
+  facture_id uuid, created_at timestamptz not null default now(),
+  constraint temps_pkey primary key (id),
+  constraint temps_collaborateur_id_fkey foreign key (collaborateur_id) references public.collaborateurs(id) on delete cascade,
+  constraint temps_projet_id_fkey foreign key (projet_id) references public.projets(id) on delete cascade,
+  constraint temps_facture_id_fkey foreign key (facture_id) references public.factures(id) on delete set null,
+  constraint temps_statut_check check (statut = any (array['brouillon'::text, 'soumis'::text, 'valide'::text])));
 create table public.relances (
   id uuid primary key default gen_random_uuid(), facture_id uuid not null references public.factures(id),
   date_envoi timestamptz not null default now(), canal text not null default 'email', message text,
@@ -117,7 +134,8 @@ create table public.notes_de_frais (
   justificatif_url text,
   statut text not null default 'soumise' check (statut in ('soumise','validee','remboursee')),
   created_at timestamptz not null default now());
-create table public.compteurs (cle text primary key, valeur integer not null default 0);
+create table public.compteurs (cle text not null, valeur integer not null default 0,
+  constraint compteurs_pkey primary key (cle));
 create table public.profiles (
   id uuid primary key references auth.users(id) on delete cascade, email text, nom text,
   role text not null default 'collaborateur' check (role in ('admin','manager','collaborateur')),
@@ -156,14 +174,33 @@ begin
 end;
 $function$;
 
--- Déclencheur de création des profils (le tout premier compte devient admin)
-create function public.creer_profil() returns trigger language plpgsql security definer set search_path = public as $$
+-- Déclencheur de création des profils : fonction réelle creer_profil_a_inscription (relevée le 23/10/2026).
+-- Le nom du déclencheur sur auth.users n'a pas été relevé (sans incidence sur les migrations).
+CREATE OR REPLACE FUNCTION public.creer_profil_a_inscription()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_role text;
 begin
+  -- Le TOUT PREMIER compte cree devient administrateur.
+  -- Tous les suivants sont crees comme collaborateurs.
+  if not exists (select 1 from public.profiles) then
+    v_role := 'admin';
+  else
+    v_role := 'collaborateur';
+  end if;
+
   insert into public.profiles (id, email, role)
-  values (new.id, new.email, case when (select count(*) from public.profiles) = 0 then 'admin' else 'collaborateur' end);
+  values (new.id, new.email, v_role)
+  on conflict (id) do nothing;
+
   return new;
-end $$;
-create trigger creer_profil after insert on auth.users for each row execute function public.creer_profil();
+end;
+$function$;
+create trigger creer_profil_a_inscription after insert on auth.users for each row execute function public.creer_profil_a_inscription();
 
 -- Données de démonstration minimales (comme le jeu réel : 2 clients, 2 prospects, 2 projets…)
 insert into public.collaborateurs (id, nom, prenom, email, poste, taux_horaire) values

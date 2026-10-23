@@ -10,6 +10,8 @@ done
 psql -h $H -p $P -U postgres -d essai -q -v ON_ERROR_STOP=1 -f "$R/tests-reels/simulation/socle_simule.sql" >/dev/null
 for f in "$R"/supabase/migrations/*.sql; do
   v=$(basename "$f" | cut -d_ -f1)
+  # JUSQUA=<version> : s'arrêter à cette migration (reproduire un état antérieur de la base).
+  if [ -n "$JUSQUA" ] && [ "$v" \> "$JUSQUA" ]; then echo "  [---] $(basename "$f") (non appliquée : JUSQUA=$JUSQUA)"; continue; fi
   if psql -h $H -p $P -U postgres -d essai -q -v ON_ERROR_STOP=1 -1 -f "$f" >/dev/null 2>/tmp/err.$$; then
     psql -h $H -p $P -U postgres -d essai -qAtc "insert into supabase_migrations.schema_migrations values ('$v')"
     echo "  [OK ] $(basename "$f")"

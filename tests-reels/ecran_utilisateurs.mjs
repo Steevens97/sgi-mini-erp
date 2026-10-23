@@ -220,5 +220,16 @@ try {
   console.log("  [ÉCHEC] erreur inattendue :", e.message.split("\n")[0]);
 } finally {
   await nav.close();
+  // Nettoyage : comptes jetables de ce passage, puis leurs fiches (jamais sgi@gmx.fr ni une fiche réelle).
+  for (const email of [emailAdmin, emailCollab]) {
+    const u = await compteAuth(email);
+    if (u) await api("DELETE", `/auth/v1/admin/users/${u.id}`);
+    await api("DELETE", `/rest/v1/collaborateurs?email=eq.${encodeURIComponent(email)}`);
+  }
+  const restes = (await api("GET", `/rest/v1/collaborateurs?select=nom&email=like.*${encodeURIComponent(DOM)}`)) ?? [];
+  const comptes = (await api("GET", "/auth/v1/admin/users?per_page=1000")).users.filter((u) => u.email.endsWith(DOM));
+  restes.length || comptes.length ? ko++ : ok++;
+  console.log(`  [${restes.length || comptes.length ? "ÉCHEC" : "OK "}] nettoyage : aucune fiche ni aucun compte jetable restant`
+    + `  (${restes.length} fiche(s), ${comptes.length} compte(s))`);
   console.log(`\nBILAN : ${ok}/${ok + ko} contrôles réussis`);
 }

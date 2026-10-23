@@ -120,8 +120,21 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   montants de ligne, + contrôle de la précision des 6 colonnes (le déploiement s'arrête si elle change).
   Prouvé : l'autotest échoue sur l'ancien socle, sur un arrondi de ligne faussé et sur une TVA tronquée.
   Application : prix/quantité à plus de 2 décimales refusés avec un message (la base arrondirait en silence).
-  Les autres tables (prospects, clients, projets, factures, compteurs, temps, collaborateurs) restent à
-  relever avec `tests-reels/diagnostic_tables.sql` (lecture seule) AVANT la nouvelle tentative.
+  Autres tables relevées ensuite (`tests-reels/diagnostic_tables.sql`) : aucun déclencheur sur prospects,
+  clients, projets, factures, compteurs, temps, collaborateurs ; `temps.heures numeric(5,2)`,
+  `collaborateurs.taux_horaire numeric(10,2)`, `solde_conges numeric(6,2)`, `factures.* numeric(12,2)`,
+  `UNIQUE (factures.numero)` ; ON DELETE : prospects.client_id, projets.client_id, projets.devis_id et
+  temps.facture_id SET NULL ; temps.projet_id et temps.collaborateur_id CASCADE (supprimer un projet ou une
+  fiche efface ses temps !) ; factures.client_id RESTRICT ; collaborateurs.manager_id SET NULL.
+  Fonction du déclencheur de auth.users : `creer_profil_a_inscription()` (on conflict do nothing).
+  Le socle simulé reprend tout cela exactement (relances, conges, notes_de_frais, profiles : pas encore relevés).
+- Compatibilité de l'écran Utilisateurs ACTUEL avec la migration seule : `JUSQUA=20261023130000 rejouer.sh
+  tests_compat_utilisateurs.sql` puis sans JUSQUA → 17/17 dans les deux cas, résultats identiques
+  (la migration ne touche ni `collaborateurs` ni `profiles`). L'écran actuel crée des fiches mais n'en
+  modifie pas (édition prévue au module RH).
+- Résidus d'essai : le 23/10, `ecran_utilisateurs.mjs` en ligne avait laissé 2 fiches « Jetable- » (supprimées,
+  vérifiées sans lien). Corrigé : le script supprime ses comptes ET ses fiches et le vérifie ; `instantane.py`
+  compte les « résidus d'essai » (exemple.invalid, [ESSAI]) au lieu de les masquer — attendu 0.
 - ORDRE DE DÉPLOIEMENT : 1) commit sur `main` contenant UNIQUEMENT la migration (le code en ligne reste
   compatible) ; 2) attendre « Supabase Preview » vert ET la version dans migrations_appliquees() ;
   3) seulement ensuite publier le code qui en dépend. Comme 92ba664 a été annulé, la nouvelle tentative
@@ -187,7 +200,7 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 
 ### Tests (base d'ESSAI locale, jamais Supabase) — résultats du 23/10/2026
 - `tests-reels/simulation/rejouer.sh tests-reels/simulation/tests_commercial.sql` puis
-  `select count(*) filter (where ok), count(*) from essai.resultats` : 134/134.
+  `select count(*) filter (where ok), count(*) from essai.resultats` : 134/134 (socle aligné sur Supabase).
 - `tests_concurrence.sh` : 17/17. `test_numerotation_piegee.sh` : refus par empreinte, rien appliqué.
 - Passage d'année : 2e grappe libfaketime `/var/tmp/pg-faketime` (port 5498),
   `PORT_ESSAI=5498 rejouer.sh test_passage_annee.sql`.
