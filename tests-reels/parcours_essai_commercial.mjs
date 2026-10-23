@@ -45,7 +45,7 @@ const rpc = (f, args) => api("POST", `/rest/v1/rpc/${f}`, args);
 const message = (r) => (r.d && (r.d.message || r.d.msg)) || JSON.stringify(r.d);
 const compteursReels = async () => (await api("GET", "/rest/v1/compteurs?select=cle,valeur&cle=not.like.essai_*")).d;
 const compteurEssai = async () => (await api("GET", "/rest/v1/compteurs?select=valeur&cle=like.essai_devis_*")).d?.[0]?.valeur ?? null;
-const devis = async (id) => (await api("GET", `/rest/v1/devis?id=eq.${id}&select=numero,statut,essai,pdf_statut,pdf_chemin,pdf_empreinte,total_ht`)).d[0];
+const devis = async (id) => (await api("GET", `/rest/v1/devis?id=eq.${id}&select=numero,statut,essai,pdf_statut,pdf_chemin,pdf_empreinte,total_ht,tva,total_ttc,taux_tva,territoire_tva`)).d[0];
 
 async function creerCompte(nom, role, fiche) {
   const email = `jetable-parcours-${nom}-${T}${DOM}`;
@@ -93,6 +93,10 @@ try {
     { devis_id: id, designation: "Étude de faisabilité (essai)", quantite: 2, prix_unitaire: 150 },
     { devis_id: id, designation: "Visite de site (essai)", quantite: 1, prix_unitaire: 100 }]);
   verifier("lignes ajoutées, total HT calculé par la base", lg.s === 201 && Number((await devis(id)).total_ht) === 400);
+  const tv = await devis(id);
+  verifier("TVA Martinique 8,5 % calculée par la base : 34,00 € ; TTC 434,00 €",
+    tv.territoire_tva === "MQ" && Number(tv.taux_tva) === 8.5 && Number(tv.tva) === 34 && Number(tv.total_ttc) === 434,
+    `${tv.territoire_tva} ${tv.taux_tva} % → ${tv.tva} / ${tv.total_ttc}`);
 
   console.log("\n== 2. Écran du brouillon (manager, site en ligne)");
   const m = await connexion(manager);
@@ -102,6 +106,7 @@ try {
   let texte = await m.textContent("main");
   verifier("brouillon : bandeau ESSAI — SANS VALEUR", texte.includes("ESSAI — SANS VALEUR"));
   verifier(`affiche « ${ASSURANCE} »`, texte.includes(ASSURANCE));
+  verifier("écran : TVA 8,5 % (Martinique) et total TTC 434,00 €", /8,5\s*%/.test(texte) && texte.includes("Total TTC : 434,00"));
   verifier("devis d'essai : aucun bouton « Émettre » à l'écran", (await m.locator("button:has-text('Émettre')").count()) === 0);
   const apercu = await m.request.get(`${B}/commercial/devis/${id}/pdf`);
   const apercuOctets = await apercu.body();
@@ -116,10 +121,16 @@ try {
   console.log("\n== 4. Archivage du PDF par le site en ligne (action « Régénérer »)");
   await m.goto(`${B}/commercial/devis/${id}`);
   await m.click("button:has-text('Régénérer le PDF')");
-  await m.waitForSelector("text=PDF archivé et disponible", { timeout: 60000 });
-  const archive = await devis(id);
+  // Une fois le PDF archivé, le bouton (et son message) laisse la place au lien « Télécharger » :
+  // on attend donc l'état réel en base, puis le lien à l'écran, et non le message.
+  let archive = await devis(id);
+  for (let i = 0; i < 60 && archive.pdf_statut !== "disponible" && archive.pdf_statut !== "echec"; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    archive = await devis(id);
+  }
   verifier("PDF archivé : statut « disponible »", archive.pdf_statut === "disponible", archive.pdf_chemin);
   await m.goto(`${B}/commercial/devis/${id}`);
+  verifier("écran : lien « Télécharger le PDF archivé » affiché", (await m.locator("a:has-text('Télécharger le PDF archivé')").count()) === 1);
   const pdf = await m.request.get(`${B}/commercial/devis/${id}/pdf`);
   const octets = await pdf.body();
   const empreinte = createHash("sha256").update(octets).digest("hex");
@@ -138,6 +149,11 @@ try {
   const pj = (await api("GET", `/rest/v1/projets?devis_id=eq.${id}&select=nom`)).d;
   verifier("prospect « gagné », client et projet créés, préfixés [ESSAI]",
     pr.statut === "gagne" && cl?.nom.startsWith("[ESSAI]") && pj.length === 1 && pj[0].nom.startsWith("[ESSAI]"), `${cl?.nom} / ${pj[0]?.nom}`);
+  const reacc = await rpc("decider_devis", { p_devis_id: id, p_auteur: manager.id, p_decision: "accepte" });
+  const nbClients = (await api("GET", "/rest/v1/clients?nom=like.*ESSAI*&select=id")).d.length;
+  const nbProjets = (await api("GET", `/rest/v1/projets?devis_id=eq.${id}&select=id`)).d.length;
+  verifier("seconde acceptation refusée : toujours UN client et UN projet", reacc.s >= 400 && nbClients === 1 && nbProjets === 1,
+    `${message(reacc)} — ${nbClients} client(s), ${nbProjets} projet(s)`);
   const ref = await rpc("decider_devis", { p_devis_id: id, p_auteur: manager.id, p_decision: "refuse" });
   verifier("devis accepté : passage à « refusé » refusé", ref.s >= 400, message(ref));
 
@@ -153,6 +169,9 @@ try {
   verifier("avenant qui rendrait la mission négative : émission refusée", eav2.s >= 400, message(eav2));
   verifier("compteur réel inchangé après tout le parcours", JSON.stringify(await compteursReels()) === JSON.stringify(reelsAvant));
   verifier("compteur d'essai : 2 numéros (devis + 1 avenant)", (await compteurEssai()) === 2, String(await compteurEssai()));
+  verifier("après les avenants : toujours UN client et UN projet pour la mission",
+    (await api("GET", "/rest/v1/clients?nom=like.*ESSAI*&select=id")).d.length === 1
+    && (await api("GET", `/rest/v1/projets?devis_id=eq.${id}&select=id`)).d.length === 1);
 
   console.log("\n== 7. Collaborateur (site en ligne) : consultation sans PDF");
   const c = await connexion(collab);
@@ -162,10 +181,19 @@ try {
   verifier("collaborateur : aucune action commerciale", (await c.locator("button:has-text('Régénérer'), button:has-text('Émettre')").count()) === 0);
   const pdfCollab = await c.request.get(`${B}/commercial/devis/${id}/pdf`);
   verifier("collaborateur : PDF refusé (403)", pdfCollab.status() === 403, String(pdfCollab.status()));
+  await c.goto(`${B}/commercial/prospects/${prospect}`);
+  texte = await c.textContent("main");
+  verifier("collaborateur : ni adresse ni email du prospect affichés", !texte.includes("1 rue de l'Essai") && !texte.includes("@"));
+  await c.goto(`${B}/utilisateurs`);
+  verifier("collaborateur : écran Utilisateurs inaccessible", !(await c.textContent("body")).includes("Créer l'accès"));
+
+  console.log("\n== 8. Émission réelle toujours bloquée (manager)");
+  await m.goto(`${B}/commercial`);
+  verifier("bandeau « Émission des devis bloquée » affiché", (await m.locator("[role=alert]", { hasText: "Émission des devis bloquée" }).count()) === 1);
 } catch (err) {
   verifier("parcours interrompu", false, err.message);
 } finally {
-  console.log("\n== 8. Nettoyage des essais");
+  console.log("\n== 9. Nettoyage des essais");
   const n = await rpc("supprimer_essais_commercial", {});
   verifier("essais supprimés par la base", n.s === 200, JSON.stringify(n.d));
   const chemins = n.d?.pdf_chemins ?? [];
