@@ -128,7 +128,10 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   temps.facture_id SET NULL ; temps.projet_id et temps.collaborateur_id CASCADE (supprimer un projet ou une
   fiche efface ses temps !) ; factures.client_id RESTRICT ; collaborateurs.manager_id SET NULL.
   Fonction du déclencheur de auth.users : `creer_profil_a_inscription()` (on conflict do nothing).
-  Le socle simulé reprend tout cela exactement (relances, conges, notes_de_frais, profiles : pas encore relevés).
+  Le socle simulé reprend tout cela exactement. Dernières tables relevées (`diagnostic_tables_rh.sql`) :
+  conges.collaborateur_id et notes_de_frais.collaborateur_id CASCADE, conges.valide_par SET NULL,
+  profiles.collaborateur_id SET NULL, profiles.id → auth.users CASCADE, relances.facture_id CASCADE ;
+  conges.nb_jours numeric(5,2), notes_de_frais.montant numeric(10,2). Les 13 tables sont alignées.
 - Compatibilité de l'écran Utilisateurs ACTUEL avec la migration seule : `JUSQUA=20261023130000 rejouer.sh
   tests_compat_utilisateurs.sql` puis sans JUSQUA → 17/17 dans les deux cas, résultats identiques
   (la migration ne touche ni `collaborateurs` ni `profiles`). L'écran actuel crée des fiches mais n'en
@@ -275,7 +278,11 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   et un collaborateur, et se reconnecte en collaborateur.
 
 - Module Commercial : DÉPLOYÉ (23/10/2026), émission réelle bloquée (coordonnées et assurances à fournir) — voir la section dédiée.
-- Module RH : plan sur la branche `preparation-rh` (docs/plan-rh.md), 5 questions en attente ; rien commencé.
+- Module RH : branche `preparation-rh-main` (issue de main, docs/plan-rh.md). D1–D5 approuvés le 23/10/2026
+  (précisions dans le plan, section 8). Les 13 tables sont relevées et reproduites dans la base d'essai.
+  En attente d'accord : nouvelles colonnes (plan 8.3), protections contre les suppressions (8.2), solution
+  pour les temps de l'admin seul (8.5). Fait sur la branche : taux obligatoire dans l'écran Utilisateurs.
+  La fiche réelle de l'utilisateur attend ses informations et son taux confirmé. Rien de déployé.
 
 ## Tests locaux dans le conteneur cloud
 - Base d'essai PostgreSQL 16 : `/var/tmp/pg-essai` (port 5499), démarrage :

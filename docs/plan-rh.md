@@ -19,8 +19,8 @@ ne sera écrit avant l'accord de l'utilisateur sur les décisions de la section 
 - Relations réelles : supprimer un projet ou une fiche **efface ses temps en cascade** (ON DELETE CASCADE).
 - Écran Utilisateurs actuel : un taux laissé vide devient 0 → à corriger (aucun taux attribué à la place
   de l'utilisateur).
-- Inventaire restant à relever avant la migration : `profiles`, `conges`, `notes_de_frais`, `relances`
-  (leurs liens vers `collaborateurs` conditionnent les protections) → `tests-reels/diagnostic_tables_rh.sql`.
+- Inventaire terminé (diagnostic exécuté par l'utilisateur, 23/10/2026) : les 13 tables sont relevées et
+  la base d'essai les reproduit exactement (voir section 8).
 
 ## 2. Plan en cinq lignes
 
@@ -102,3 +102,95 @@ ne sera écrit avant l'accord de l'utilisateur sur les décisions de la section 
 - Preuve « vraie session collaborateur » : une page de contrôle dans l'application exécute, avec la
   session de la personne connectée, une lecture de `taux_horaire` et affiche le refus de la base.
 - Supabase : vérification d'un temps par le Table Editor (liens `collaborateur_id` et `projet_id`).
+
+## 8. Analyse du schéma (13 tables relevées) et ajustements à approuver
+
+Décisions D1 à D5 approuvées le 23/10/2026 avec les précisions de l'utilisateur. Cette section liste ce
+que leur mise en œuvre exige. **Rien n'est encore écrit dans une migration.**
+
+### 8.1 Ce que le diagnostic révèle
+
+| Lien réel | Effet aujourd'hui si on supprime la ligne référencée |
+|---|---|
+| temps.collaborateur_id, conges.collaborateur_id, notes_de_frais.collaborateur_id → CASCADE | supprimer une fiche efface **sans message** ses temps, congés et notes de frais (démontré sur la base d'essai) |
+| conges.valide_par → SET NULL | supprimer la fiche d'un manager efface **qui a validé** ses congés (démontré) |
+| profiles.collaborateur_id → SET NULL | supprimer une fiche détache le compte qui y était rattaché |
+| collaborateurs.manager_id → SET NULL | supprimer un manager efface la hiérarchie de son équipe |
+| temps.projet_id → CASCADE | supprimer un projet efface ses temps |
+| projets.devis_id, projets.client_id, prospects.client_id → SET NULL | supprimer un client ou un devis efface les liens commerciaux |
+| temps.facture_id → SET NULL ; relances.facture_id → CASCADE | supprimer une facture « défacture » ses temps et efface ses relances |
+| factures.client_id → RESTRICT | seul lien déjà protégé |
+
+Aucun déclencheur préexistant sur ces tables, hormis ceux de nos migrations (profils : auto-rétrogradation,
+dernier admin ; Commercial).
+
+### 8.2 Protections proposées (déclencheurs, sans toucher aux clés étrangères existantes)
+
+Refus de la suppression, avec un message en français, **même depuis le tableau de bord ou la clé secrète** :
+
+- **fiche collaborateur** dès qu'elle a des temps, des congés, des notes de frais, qu'elle a validé un
+  congé ou un temps, qu'un compte y est rattaché ou qu'elle manage quelqu'un → utiliser `date_sortie` ;
+- **projet** dès qu'il a des temps ou qu'il est issu d'un devis (lien commercial) ;
+- **client** dès qu'il est lié à un prospect, un projet ou une facture ;
+- **facture** dès qu'elle porte des temps ou des relances (préparation du module Finance ; table vide).
+
+Choix des déclencheurs plutôt que de modifier les clés étrangères : aucune contrainte existante n'est
+retouchée, le message est compréhensible, et la protection couvre aussi la clé secrète.
+
+### 8.3 Nouvelles colonnes à approuver (aucune n'est ajoutée sans accord)
+
+| Colonne | Pourquoi |
+|---|---|
+| `temps.saisi_par` (identifiant du compte), `temps.saisi_par_nom`, `temps.saisi_le` | D2 : distinguer le collaborateur concerné de la personne qui a saisi (l'admin pour autrui). Identifiant du **compte** et non de la fiche, car l'admin n'a pas encore de fiche ; nom recopié car un compte révoqué est supprimé (même méthode que `devis.emis_par` / `emis_par_nom`). Posés par la base. |
+| `temps.valide_par`, `temps.valide_par_nom`, `temps.valide_le` | D5 approuvé (`valide_par`, `valide_le`) ; `valide_par_nom` ajouté pour la même raison que ci-dessus. Posés par la base à la validation, effacés seulement par une réouverture tracée. |
+| `temps.historique` (liste d'événements, ajout seul) | D2 : à chaque réouverture d'un temps validé, la base y recopie la validation précédente (qui, quand), le motif obligatoire et l'auteur de la réouverture ; aussi les renvois et les dérogations. Aucun événement ne peut être modifié ni effacé. *Alternative* : une table `temps_historique` (nouvelle table, à approuver) — plus classique mais plus lourde ; je recommande la colonne. |
+| `temps.motif_derogation` | D4 : justification obligatoire quand l'admin dépasse 12 h dans la journée ou saisit au-delà de la fenêtre de 31 jours. |
+| `collaborateurs.date_sortie` | D5 approuvé. Distincte de la révocation du compte (qui reste dans l'écran Utilisateurs). |
+
+### 8.4 Règles de gestion retenues (paramètres, modifiables par une nouvelle migration)
+
+Présentés à l'écran comme des **paramètres de gestion de SG Ingénierie**, sans référence au droit du travail :
+
+- pas de saisie : 0,25 h ; heures > 0 ; une ligne ne dépasse pas 24 h ;
+- fenêtre courante : de J-31 à aujourd'hui (heure de Martinique) ; jamais de date future ; au-delà de
+  31 jours : admin seulement, avec motif ;
+- seuil d'alerte : 12 h par jour et par collaborateur (toutes lignes) ; l'écran prévient avant
+  l'enregistrement ; au-delà, seul l'admin enregistre, avec motif ;
+- départ : après `date_sortie`, plus de saisie pour une journée postérieure ; une régularisation portant
+  sur une journée **antérieure ou égale** à la sortie reste possible (dans la fenêtre, ou par l'admin avec
+  motif) ; la fiche reste consultable, l'historique est conservé.
+
+### 8.5 Validation (D3) et réouverture (D2)
+
+- Le responsable hiérarchique (`manager_id`) valide les temps de son équipe ; l'admin valide ceux des
+  autres ; personne ne valide ses propres temps (contrôle en base, y compris pour l'admin).
+- Réouverture d'un temps validé non facturé : admin seulement, motif obligatoire ; le temps repasse en
+  brouillon pour correction par son auteur, la validation précédente est conservée dans `historique`.
+- Temps facturé : figé (ni modification, ni suppression, ni changement de facture, projet ou collaborateur).
+
+**Vos propres temps quand vous travaillez seul — deux options explicites (point non bloquant) :**
+
+1. *(recommandée)* désigner une **personne réelle** extérieure à la saisie (associé, expert-comptable,
+   assistante) comme responsable sur votre fiche, avec un compte manager : elle valide vos temps ;
+2. *si personne ne peut valider* : vos temps restent **« soumis »** et peuvent recevoir une
+   **attestation de l'intéressé**, enregistrée dans `historique` (qui, quand, motif) et affichée partout
+   comme « Attesté par l'intéressé — non validé par un tiers ». Ce n'est pas une validation : le statut
+   reste « soumis », et le futur module Finance décidera, avec votre accord, s'il facture ces temps.
+
+Aucun compte fictif, aucune exception cachée.
+
+### 8.6 Projets (D1)
+
+- Statuts réels : `en_cours` (ouvert à la saisie), `termine`, `annule`.
+- Création manuelle : admin seulement ; client facultatif (missions internes, prospection) ; reprise
+  d'historique possible (comme les deux projets de démonstration, sans devis).
+- Collaborateurs : vue à colonnes explicites des projets `en_cours` (identifiant, nom, nom du client) ;
+  aucune coordonnée client, aucun lien vers le devis.
+
+### 8.7 Déjà fait sur la branche (testé localement, non déployé)
+
+- Base d'essai : les 4 dernières tables alignées ; non-régression Commercial 134/134, concurrence 17/17,
+  compatibilité Utilisateurs 17/17.
+- Écran Utilisateurs : le taux n'est plus prérempli à 0 ni remplacé par 0 ; champ obligatoire ; refus
+  serveur clair si vide ou à plus de 2 décimales ; 0 accepté seulement s'il est saisi
+  (`tests-reels/simulation/taux_obligatoire.mjs`, 7/7 en navigateur local).

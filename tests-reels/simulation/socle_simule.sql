@@ -54,7 +54,8 @@ alter default privileges in schema public grant all on functions to anon, authen
 -- Les 13 tables. Définitions EXACTES relevées dans Supabase le 23/10/2026 (tests-reels/diagnostic_*.sql,
 -- exécutés par l'utilisateur) pour clients, prospects, devis, devis_lignes, collaborateurs, projets,
 -- factures, temps, compteurs : types et précisions, défauts, noms de contraintes, comportements ON DELETE.
--- relances, conges, notes_de_frais, profiles : relevés sur l'API seulement (à vérifier avant leurs modules).
+-- relances, conges, notes_de_frais, profiles : relevés le 23/10/2026 (tests-reels/diagnostic_tables_rh.sql).
+-- Les 13 tables sont désormais alignées sur Supabase.
 create table public.clients (
   id uuid not null default gen_random_uuid(), nom text not null, email_contact text,
   telephone text, adresse text, created_at timestamptz not null default now(),
@@ -119,27 +120,37 @@ create table public.temps (
   constraint temps_facture_id_fkey foreign key (facture_id) references public.factures(id) on delete set null,
   constraint temps_statut_check check (statut = any (array['brouillon'::text, 'soumis'::text, 'valide'::text])));
 create table public.relances (
-  id uuid primary key default gen_random_uuid(), facture_id uuid not null references public.factures(id),
+  id uuid not null default gen_random_uuid(), facture_id uuid not null,
   date_envoi timestamptz not null default now(), canal text not null default 'email', message text,
-  created_at timestamptz not null default now());
+  created_at timestamptz not null default now(),
+  constraint relances_pkey primary key (id),
+  constraint relances_facture_id_fkey foreign key (facture_id) references public.factures(id) on delete cascade);
 create table public.conges (
-  id uuid primary key default gen_random_uuid(), collaborateur_id uuid not null references public.collaborateurs(id),
-  type text not null default 'conges_payes' check (type in ('conges_payes','rtt','sans_solde')),
-  date_debut date not null, date_fin date not null, nb_jours numeric not null default 1, motif text,
-  statut text not null default 'demandee' check (statut in ('demandee','validee','refusee')),
-  valide_par uuid references public.collaborateurs(id), created_at timestamptz not null default now());
+  id uuid not null default gen_random_uuid(), collaborateur_id uuid not null,
+  type text not null default 'conges_payes', date_debut date not null, date_fin date not null,
+  nb_jours numeric(5,2) not null default 1, motif text, statut text not null default 'demandee',
+  valide_par uuid, created_at timestamptz not null default now(),
+  constraint conges_pkey primary key (id),
+  constraint conges_collaborateur_id_fkey foreign key (collaborateur_id) references public.collaborateurs(id) on delete cascade,
+  constraint conges_valide_par_fkey foreign key (valide_par) references public.collaborateurs(id) on delete set null,
+  constraint conges_statut_check check (statut = any (array['demandee'::text, 'validee'::text, 'refusee'::text])),
+  constraint conges_type_check check (type = any (array['conges_payes'::text, 'rtt'::text, 'sans_solde'::text])));
 create table public.notes_de_frais (
-  id uuid primary key default gen_random_uuid(), collaborateur_id uuid not null references public.collaborateurs(id),
-  date_depense date not null default current_date, montant numeric not null default 0, categorie text,
-  justificatif_url text,
-  statut text not null default 'soumise' check (statut in ('soumise','validee','remboursee')),
-  created_at timestamptz not null default now());
+  id uuid not null default gen_random_uuid(), collaborateur_id uuid not null,
+  date_depense date not null default current_date, montant numeric(10,2) not null default 0, categorie text,
+  justificatif_url text, statut text not null default 'soumise', created_at timestamptz not null default now(),
+  constraint notes_de_frais_pkey primary key (id),
+  constraint notes_de_frais_collaborateur_id_fkey foreign key (collaborateur_id) references public.collaborateurs(id) on delete cascade,
+  constraint notes_de_frais_statut_check check (statut = any (array['soumise'::text, 'validee'::text, 'remboursee'::text])));
 create table public.compteurs (cle text not null, valeur integer not null default 0,
   constraint compteurs_pkey primary key (cle));
 create table public.profiles (
-  id uuid primary key references auth.users(id) on delete cascade, email text, nom text,
-  role text not null default 'collaborateur' check (role in ('admin','manager','collaborateur')),
-  collaborateur_id uuid references public.collaborateurs(id), created_at timestamptz not null default now());
+  id uuid not null, email text, nom text, role text not null default 'collaborateur',
+  collaborateur_id uuid, created_at timestamptz not null default now(),
+  constraint profiles_pkey primary key (id),
+  constraint profiles_id_fkey foreign key (id) references auth.users(id) on delete cascade,
+  constraint profiles_collaborateur_id_fkey foreign key (collaborateur_id) references public.collaborateurs(id) on delete set null,
+  constraint profiles_role_check check (role = any (array['admin'::text, 'manager'::text, 'collaborateur'::text])));
 
 do $$
 declare t text;
