@@ -105,7 +105,7 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   chaque module. `instantane_complet.py <après.json> <avant.json>` : comparaison sans aucune exclusion
   (13 tables en colonnes d'origine, comptes, espaces de stockage et fichiers).
 
-## Module Commercial (migration 20261024100000) — MIGRATION APPLIQUÉE (temps 1, 23/10/2026), ÉCRANS NON PUBLIÉS
+## Module Commercial (migration 20261024100000) — DÉPLOYÉ (temps 1 et 2, 23/10/2026) ; émission réelle bloquée
 - Ne jamais fusionner dans `main` sans l'accord explicite de l'utilisateur (fusion = déploiement).
 - Incident du 23/10/2026 : 1re tentative (fusion 92ba664) refusée par l'autotest (« totaux du brouillon
   incorrects ») → rien appliqué en base ; le code était pourtant publié sur Vercel. Annulé par le commit
@@ -146,8 +146,18 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   tests_verrouillage.py (mode déployé) 189/189 ; ecran_utilisateurs.mjs en ligne 45/45 (dont nettoyage) ;
   site toujours en ancienne version (Commercial « Module à venir ») ; `instantane_complet.py` (rien exclu) :
   tout identique sauf le nouvel espace `devis` (vide) ; aucun compteur, aucun compte ni fichier jetable restant.
-- TEMPS 2 (écrans) : en attente de l'accord explicite de l'utilisateur. Commit préparé localement sur la branche
-  `deploiement-commercial` (contenu = preparation-commercial), à pousser en avance rapide sur main.
+- TEMPS 2 FAIT (accord de l'utilisateur) : commit 4f7246b sur main (écrans ; migration inchangée, aucune nouvelle).
+  1er passage du parcours : arrêt à l'archivage du PDF — défaut du SCRIPT (il attendait le message « PDF archivé et
+  disponible », qui disparaît avec le bouton remplacé par le lien « Télécharger ») ; l'archivage avait réussi.
+  Script corrigé (attente de l'état en base puis du lien) et complété ; 2e passage : 57/57 sur le site — TVA MQ
+  8,5 % (400 → 34 → 434), émission ESSAI-DEV, PDF archivé par le site, téléchargé = stocké (SHA-256, taille),
+  contenu du PDF vérifié, envoi déclaré, acceptation : 1 client + 1 projet, seconde acceptation idempotente (HTTP 204)
+  sans doublon ni modification, accepté → refusé interdit, avenant -100 € archivé/envoyé/accepté sans nouveau
+  client ni projet, avenant rendant la mission négative refusé, écrans collaborateur (consultation, pas de PDF,
+  pas de coordonnées, pas d'actions), bandeau d'émission bloquée ; nettoyage complet ; tests_verrouillage 189/189 ;
+  instantane_complet identique (seul ajout depuis le temps 1 : espace `devis`, vide) ; aucun compteur.
+- Défaut mineur relevé (essais seulement, NON corrigé — exigerait une migration) : le client créé à l'acceptation
+  d'un devis d'essai s'appelle « [ESSAI] [ESSAI] Société » (préfixe ajouté au nom de société qui l'a déjà).
 
 ### Arbitrages DÉFINITIFS de l'utilisateur (23/10/2026) — ne plus les redemander
 - `devis.type_mission` approuvé (conseil, amo, moex, opc, donnees, drone, autre).
@@ -259,7 +269,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Tests : 44/44 écran (local + en ligne), 42/42 RLS. Reste : l'utilisateur crée sa fiche, puis un manager
   et un collaborateur, et se reconnecte en collaborateur.
 
-- Module Commercial : migration appliquée (temps 1) ; écrans non publiés (temps 2 en attente) — voir la section dédiée.
+- Module Commercial : DÉPLOYÉ (23/10/2026), émission réelle bloquée (coordonnées et assurances à fournir) — voir la section dédiée.
+- Module RH : plan sur la branche `preparation-rh` (docs/plan-rh.md), 5 questions en attente ; rien commencé.
 
 ## Tests locaux dans le conteneur cloud
 - Base d'essai PostgreSQL 16 : `/var/tmp/pg-essai` (port 5499), démarrage :
