@@ -18,17 +18,6 @@ LEA, BRUNO, CHLOE = (
 ONZE = ["clients", "prospects", "devis", "devis_lignes", "projets", "factures", "temps",
         "relances", "conges", "notes_de_frais", "compteurs"]
 REFUS = (401, 403)
-# Module Commercial (migration 20261024100000) : admin et manager sur prospects, devis, lignes ;
-# clients en lecture admin/manager, écriture admin ; collaborateur par les vues de consultation.
-# Les autres tables (modules encore fermés) restent « admin seulement ».
-COMMERCIAL = ["prospects", "devis", "devis_lignes"]
-FERMEES = ["projets", "factures", "temps", "relances", "conges", "notes_de_frais", "compteurs"]
-VUES = {"commercial_prospects": ("prospects", "id,nom,societe,source,statut,essai,created_at"),
-        "commercial_devis": ("devis", "id,prospect_id,numero,statut,total_ht,tva,total_ttc,essai,type_mission"),
-        "commercial_devis_lignes": ("devis_lignes", "id,devis_id,designation,quantite,prix_unitaire,montant_ht")}
-CACHEES = {"commercial_prospects": ["email", "telephone", "adresse", "client_id"],
-           "commercial_devis": ["instantane_emission", "pdf_chemin", "criteres_tva", "envoi_destinataire", "emis_par"]}
-DEPLOYE = False  # renseigné au démarrage d'après migrations_appliquees()
 
 
 def appel(methode, chemin, jeton=None, corps=None, brut=None, entetes=None, cle=ANON):
@@ -101,17 +90,14 @@ def voit_quelque_chose(j):
     for t in ["profiles"] + ONZE:
         total += len(lignes(appel("GET", f"/rest/v1/{t}?select=*", j)[1]))
     total += len(lignes(appel("GET", "/rest/v1/collaborateurs?select=id", j)[1]))
-    if DEPLOYE:
-        for v in VUES:
-            total += len(lignes(appel("GET", f"/rest/v1/{v}?select=id", j)[1]))
     return total
 
 
-def essais_ecriture_refusee(j, qui, moi_collab, commercial=False):
+def essais_ecriture_refusee(j, qui, moi_collab):
     s, projets = secret("GET", "/rest/v1/projets?select=id&limit=1")
     essais = {
         "clients": {"nom": "Intrus"},
-        **({} if commercial else {"prospects": {"nom": "Intrus"}}),
+        "prospects": {"nom": "Intrus"},
         "compteurs": {"cle": "intrus", "valeur": 999},
         "notes_de_frais": {"collaborateur_id": moi_collab or LEA, "montant": 1},
         "temps": {"collaborateur_id": moi_collab or LEA, "projet_id": projets[0]["id"] if projets else None, "heures": 1},
@@ -127,19 +113,7 @@ def essais_ecriture_refusee(j, qui, moi_collab, commercial=False):
         verifier(f"{qui} : suppression dans {table} sans effet", lignes(r) == [], f"HTTP {s}")
 
 
-def bucket_devis_ferme(j, qui):
-    s, r = appel("POST", "/storage/v1/object/list/devis", j, {"prefix": ""})
-    verifier(f"{qui} : bucket devis, rien de visible", lignes(r) == [], f"HTTP {s}")
-    s, r = appel("POST", f"/storage/v1/object/devis/jetable-{qui}-{T}.pdf", j, brut=b"%PDF-1.4 essai",
-                 entetes={"Content-Type": "application/pdf"})
-    verifier(f"{qui} : bucket devis, dépôt refusé (clé secrète seulement)", s >= 400, f"HTTP {s}")
-
-
 def main():
-    global DEPLOYE
-    s, versions = secret("POST", "/rest/v1/rpc/migrations_appliquees", {})
-    DEPLOYE = "20261024100000" in (versions or [])
-    print("Module Commercial déployé :", "oui" if DEPLOYE else "non")
     avant = compter_tout()
     print("Lignes des 11 tables (clé secrète) :", avant)
 
@@ -158,11 +132,6 @@ def main():
     verifier("prochain_numero() refusée", s in REFUS, f"HTTP {s} : {message(r)}")
     s, r = appel("POST", "/storage/v1/object/list/justificatifs", corps={"prefix": ""})
     verifier("bucket justificatifs : rien de visible", lignes(r) == [], f"HTTP {s}")
-    if DEPLOYE:
-        for v in VUES:
-            s, r = appel("GET", f"/rest/v1/{v}?select=id")
-            verifier(f"vue {v} refusée", s in REFUS, f"HTTP {s}")
-        bucket_devis_ferme(None, "visiteur")
 
     print("\n== Préparation des comptes jetables")
     c = {
@@ -181,25 +150,6 @@ def main():
     essais_ecriture_refusee(j["collab"], "collaborateur", LEA)
     s, r = appel("POST", "/rest/v1/rpc/prochain_numero", j["collab"], {"p_cle": "essai_securite", "p_prefixe": "ESSAI"})
     verifier("prochain_numero() refusée", s >= 400, f"HTTP {s} : {message(r)}")
-    if DEPLOYE:
-        print("  -- consultation commerciale par les vues")
-        for v, (table, colonnes) in VUES.items():
-            s, r = appel("GET", f"/rest/v1/{v}?select={colonnes}", j["collab"])
-            verifier(f"{v} : lisible avec ses colonnes explicites", s == 200 and len(lignes(r)) == avant[table],
-                     f"HTTP {s}, {len(lignes(r))}/{avant[table]}")
-            s, r = appel("POST", f"/rest/v1/{v}", j["collab"], {"nom": "Intrus"} if table == "prospects" else {})
-            verifier(f"{v} : écriture refusée", s >= 400, f"HTTP {s}")
-        for v, colonnes in CACHEES.items():
-            for col in colonnes:
-                s, r = appel("GET", f"/rest/v1/{v}?select=id,{col}", j["collab"])
-                verifier(f"{v} : colonne {col} absente", s >= 400, f"HTTP {s}")
-        s, r = appel("GET", "/rest/v1/commercial_devis?select=id,prospects(email)", j["collab"])
-        verifier("vue devis : jointure vers les coordonnées du prospect refusée", s >= 400 or all(
-            not x.get("prospects") for x in lignes(r)), f"HTTP {s}")
-        s, prospects = secret("GET", "/rest/v1/prospects?select=id&limit=1")
-        s, r = appel("POST", "/rest/v1/devis", j["collab"], {"prospect_id": prospects[0]["id"]} if prospects else {})
-        verifier("collaborateur : création d'un devis refusée", s in REFUS, f"HTTP {s}")
-        bucket_devis_ferme(j["collab"], "collaborateur")
 
     print("\n== 3. Taux horaire protégé au niveau des données")
     for qui in ("collab", "manager", "admin"):
@@ -224,34 +174,11 @@ def main():
     s2, v = secret("GET", f"/rest/v1/collaborateurs?id=eq.{LEA}&select=taux_horaire")
     verifier("collaborateur : ne peut pas changer son taux", v[0]["taux_horaire"] != 999, f"HTTP {s}, taux = {v[0]['taux_horaire']}")
 
-    if not DEPLOYE:
-        print("\n== 4. Manager : 11 tables fermées")
-        for t in ONZE:
-            s, r = appel("GET", f"/rest/v1/{t}?select=*", j["manager"])
-            verifier(f"{t} : aucune ligne lue", lignes(r) == [], f"HTTP {s}")
-        essais_ecriture_refusee(j["manager"], "manager", BRUNO)
-    else:
-        print("\n== 4. Manager : Commercial ouvert, modules encore fermés")
-        for t in COMMERCIAL + ["clients"]:
-            s, r = appel("GET", f"/rest/v1/{t}?select=*", j["manager"])
-            verifier(f"{t} : lisible en entier", s == 200 and len(lignes(r)) == avant[t], f"{len(lignes(r))}/{avant[t]}")
-        for t in FERMEES:
-            s, r = appel("GET", f"/rest/v1/{t}?select=*", j["manager"])
-            verifier(f"{t} (module fermé) : aucune ligne lue", lignes(r) == [], f"HTTP {s}")
-        essais_ecriture_refusee(j["manager"], "manager", BRUNO, commercial=True)
-        rien = "id=eq.00000000-0000-0000-0000-000000000000"
-        for table, corps, libelle in (
-            ("devis", {"numero": "PIRATE"}, "numéro"), ("devis", {"statut": "accepte"}, "statut"),
-            ("devis", {"total_ttc": 0}, "total"), ("devis", {"pdf_statut": "disponible"}, "état du PDF"),
-            ("devis", {"essai": True}, "indicateur d'essai"), ("prospects", {"essai": True}, "indicateur d'essai"),
-            ("devis_lignes", {"montant_ht": 0}, "montant de ligne")):
-            s, r = appel("PATCH", f"/rest/v1/{table}?{rien}", j["manager"], corps)
-            verifier(f"manager : {table}.{list(corps)[0]} ({libelle}) non modifiable", s in REFUS, f"HTTP {s}")
-        s, r = appel("POST", "/rest/v1/prospects", j["manager"], {"nom": "Intrus", "essai": True})
-        verifier("manager : création d'un prospect d'essai refusée (clé secrète seulement)", s in REFUS, f"HTTP {s}")
-        s, r = appel("POST", "/rest/v1/devis", j["manager"], {"prospect_id": None, "statut": "accepte"})
-        verifier("manager : création d'un devis déjà accepté refusée", s in REFUS, f"HTTP {s}")
-        bucket_devis_ferme(j["manager"], "manager")
+    print("\n== 4. Manager : 11 tables fermées")
+    for t in ONZE:
+        s, r = appel("GET", f"/rest/v1/{t}?select=*", j["manager"])
+        verifier(f"{t} : aucune ligne lue", lignes(r) == [], f"HTTP {s}")
+    essais_ecriture_refusee(j["manager"], "manager", BRUNO)
 
     print("\n== 5. Admin actif : accès complet")
     for t in ONZE:
@@ -276,8 +203,6 @@ def main():
     verifier("bucket : suppression par un collaborateur sans effet", lignes(r) == [], f"HTTP {s}")
     s, r = appel("DELETE", "/storage/v1/object/justificatifs", j["admin"], {"prefixes": [nom_fichier]})
     verifier("bucket : suppression par l'admin", s == 200 and len(lignes(r)) == 1, f"HTTP {s}")
-    if DEPLOYE:
-        bucket_devis_ferme(j["admin"], "admin")
 
     print("\n== 6. Admin devant changer son mot de passe (jeton valide)")
     verifier("ne voit rien du tout", voit_quelque_chose(j["admin_provisoire"]) == 0)
@@ -338,13 +263,7 @@ def main():
     print("  fonctions exposées :", ", ".join(fonctions))
     identite = {"acces_actif", "est_admin", "mon_collaborateur_id", "mon_role"}
     for f in fonctions:
-        # Arguments vides (null) aux noms exacts : la fonction est trouvée, le droit d'exécution est
-        # contrôlé avant tout traitement. prochain_numero : clé d'essai, nettoyée à la fin.
-        corps_rpc = next((x.get("schema", {}) for x in d["paths"][f"/rpc/{f}"].get("post", {}).get("parameters", [])
-                          if x.get("in") == "body"), {})
-        args = {k: None for k in corps_rpc.get("properties", {})}
-        if f == "prochain_numero":
-            args = {"p_cle": "essai_securite", "p_prefixe": "ESSAI"}
+        args = {"p_cle": "essai_securite", "p_prefixe": "ESSAI"} if f == "prochain_numero" else {}
         s_anon, _ = appel("POST", f"/rest/v1/rpc/{f}", corps=args)
         s_admin, r_admin = appel("POST", f"/rest/v1/rpc/{f}", j["admin"], args)
         if f in identite:
@@ -379,11 +298,6 @@ finally:
         secret("DELETE", "/storage/v1/object/justificatifs", {"prefixes": jetables})
     s, r = secret("POST", "/storage/v1/object/list/justificatifs", {"prefix": ""})
     print("  fichiers restants dans le bucket :", [o["name"] for o in lignes(r)])
-    s, r = secret("POST", "/storage/v1/object/list/devis", {"prefix": ""})
-    jetables = [o["name"] for o in lignes(r) if o["name"].startswith("jetable-")]
-    if jetables:
-        secret("DELETE", "/storage/v1/object/devis", {"prefixes": jetables})
-        print("  ATTENTION : des fichiers jetables avaient été déposés dans le bucket devis ; supprimés")
     s, r = secret("GET", "/rest/v1/compteurs?cle=eq.essai_securite")
     if lignes(r):
         secret("DELETE", "/rest/v1/compteurs?cle=eq.essai_securite")
