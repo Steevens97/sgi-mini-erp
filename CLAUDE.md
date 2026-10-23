@@ -93,10 +93,10 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   redirection, menu, bandeaux « profil illisible » / « non rattaché ». Testé : redirections + mauvais
   identifiants. PAS encore testé connecté (le 1er compte créé devient admin : ne pas créer de compte
   jetable avant celui de l'utilisateur).
-- Étape 3 À FAIRE : page /inscription à usage unique (création côté serveur, email_confirm: true,
-  refus si un compte existe déjà, puis connexion directe) → compte admin de l'utilisateur → tester
-  menu admin → supprimer la page → guider la fermeture de l'inscription (Authentication → Sign In /
-  Providers → « Allow new users to sign up » désactivé) → prouver par un vrai signUp refusé.
+- Étape 3 FAITE : compte admin de l'utilisateur créé (sgi@gmx.fr) via /inscription à usage unique,
+  page supprimée ensuite ; inscription publique coupée dans Supabase (disable_signup = true).
+  Contrôle à refaire si besoin : GET /auth/v1/settings → disable_signup, et un vrai POST /auth/v1/signup refusé.
+  Site en ligne sur Vercel (variables d'environnement saisies dans Vercel).
 - Étape 4 : migration sécurité (mon_role, mon_collaborateur_id, est_admin, RLS profiles/collaborateurs).
 - Étape 5 : écran Utilisateurs ; puis comptes de test manager + collaborateur, reconnexion en collaborateur.
 
