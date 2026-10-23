@@ -29,6 +29,7 @@ VUES = {"commercial_prospects": ("prospects", "id,nom,societe,source,statut,essa
 CACHEES = {"commercial_prospects": ["email", "telephone", "adresse", "client_id"],
            "commercial_devis": ["instantane_emission", "pdf_chemin", "criteres_tva", "envoi_destinataire", "emis_par"]}
 DEPLOYE = False  # renseigné au démarrage d'après migrations_appliquees()
+RH = False       # module RH (migration 20261025100000) : projets et temps sortent des modules fermés
 
 
 def appel(methode, chemin, jeton=None, corps=None, brut=None, entetes=None, cle=ANON):
@@ -104,6 +105,8 @@ def voit_quelque_chose(j):
     if DEPLOYE:
         for v in VUES:
             total += len(lignes(appel("GET", f"/rest/v1/{v}?select=id", j)[1]))
+    if RH:
+        total += len(lignes(appel("GET", "/rest/v1/rh_projets_ouverts?select=id", j)[1]))
     return total
 
 
@@ -136,10 +139,13 @@ def bucket_devis_ferme(j, qui):
 
 
 def main():
-    global DEPLOYE
+    global DEPLOYE, RH, FERMEES
     s, versions = secret("POST", "/rest/v1/rpc/migrations_appliquees", {})
     DEPLOYE = "20261024100000" in (versions or [])
-    print("Module Commercial déployé :", "oui" if DEPLOYE else "non")
+    RH = "20261025100000" in (versions or [])
+    if RH:
+        FERMEES = [t for t in FERMEES if t not in ("projets", "temps")]
+    print("Module Commercial déployé :", "oui" if DEPLOYE else "non", "| module RH :", "oui" if RH else "non")
     avant = compter_tout()
     print("Lignes des 11 tables (clé secrète) :", avant)
 
@@ -174,10 +180,29 @@ def main():
     print("  4 comptes créés :", ", ".join(x["email"] for x in c.values()))
     j = {k: jeton(v) for k, v in c.items()}
 
-    print("\n== 2. Collaborateur (Léa) : 11 tables fermées")
+    print("\n== 2. Collaborateur (Léa) : tables fermées" + (" (sauf ses propres temps)" if RH else ""))
     for t in ONZE:
         s, r = appel("GET", f"/rest/v1/{t}?select=*", j["collab"])
-        verifier(f"{t} : aucune ligne lue", lignes(r) == [], f"HTTP {s}, réel : {avant[t]} ligne(s)")
+        if RH and t == "temps":
+            siens = len(lignes(secret("GET", f"/rest/v1/temps?select=id&collaborateur_id=eq.{LEA}")[1]))
+            verifier("temps : uniquement les siens", len(lignes(r)) == siens and all(x["collaborateur_id"] == LEA for x in lignes(r)),
+                     f"{len(lignes(r))}/{siens} ligne(s), réel : {avant[t]}")
+        else:
+            verifier(f"{t} : aucune ligne lue", lignes(r) == [], f"HTTP {s}, réel : {avant[t]} ligne(s)")
+    if RH:
+        ouverts = len(lignes(secret("GET", "/rest/v1/projets?select=id&statut=eq.en_cours")[1]))
+        s, r = appel("GET", "/rest/v1/rh_projets_ouverts?select=*", j["collab"])
+        verifier("projets ouverts : visibles par la vue, nom du client seulement",
+                 len(lignes(r)) == ouverts and all(set(x) == {"id", "nom", "statut", "client_nom"} for x in lignes(r)), f"{len(lignes(r))}/{ouverts}")
+        s, r = appel("GET", "/rest/v1/rh_projets_ouverts?select=id,clients(email_contact)", j["collab"])
+        verifier("projets ouverts : jointure vers les coordonnées client refusée", s >= 400, f"HTTP {s}")
+        siens = lignes(secret("GET", f"/rest/v1/temps?select=id&collaborateur_id=eq.{LEA}&limit=1")[1])
+        if siens:
+            s, r = appel("PATCH", f"/rest/v1/temps?id=eq.{siens[0]['id']}", j["collab"], {"statut": "valide"})
+            verifier("temps : se valider directement refusé", s in REFUS, f"HTTP {s}")
+        s, r = appel("POST", "/rest/v1/rpc/rh_changer_statut_temps", j["collab"],
+                     {"p_auteur": None, "p_temps_ids": None, "p_action": None, "p_motif": None})
+        verifier("temps : fonction de service refusée", s in REFUS, f"HTTP {s}")
     essais_ecriture_refusee(j["collab"], "collaborateur", LEA)
     s, r = appel("POST", "/rest/v1/rpc/prochain_numero", j["collab"], {"p_cle": "essai_securite", "p_prefixe": "ESSAI"})
     verifier("prochain_numero() refusée", s >= 400, f"HTTP {s} : {message(r)}")
@@ -232,13 +257,20 @@ def main():
         essais_ecriture_refusee(j["manager"], "manager", BRUNO)
     else:
         print("\n== 4. Manager : Commercial ouvert, modules encore fermés")
-        for t in COMMERCIAL + ["clients"]:
+        for t in COMMERCIAL + ["clients"] + (["projets", "temps"] if RH else []):
             s, r = appel("GET", f"/rest/v1/{t}?select=*", j["manager"])
             verifier(f"{t} : lisible en entier", s == 200 and len(lignes(r)) == avant[t], f"{len(lignes(r))}/{avant[t]}")
         for t in FERMEES:
             s, r = appel("GET", f"/rest/v1/{t}?select=*", j["manager"])
             verifier(f"{t} (module fermé) : aucune ligne lue", lignes(r) == [], f"HTTP {s}")
         essais_ecriture_refusee(j["manager"], "manager", BRUNO, commercial=True)
+        if RH:
+            un = lignes(secret("GET", "/rest/v1/temps?select=id&limit=1")[1])
+            if un:
+                s, r = appel("PATCH", f"/rest/v1/temps?id=eq.{un[0]['id']}", j["manager"], {"statut": "valide"})
+                verifier("manager : lecture de tous les temps ≠ écriture (validation directe refusée)", s in REFUS, f"HTTP {s}")
+            s, r = appel("POST", "/rest/v1/projets", j["manager"], {"nom": "Intrus"})
+            verifier("manager : création de projet refusée (admin seulement)", s in REFUS, f"HTTP {s}")
         rien = "id=eq.00000000-0000-0000-0000-000000000000"
         for table, corps, libelle in (
             ("devis", {"numero": "PIRATE"}, "numéro"), ("devis", {"statut": "accepte"}, "statut"),

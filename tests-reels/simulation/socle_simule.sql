@@ -224,4 +224,12 @@ insert into public.prospects (nom, societe, statut) values ('Prospect démo 1','
   ('Prospect démo 2','Société B','gagne');
 insert into public.projets (nom, client_id) values ('Projet démo 1','33333333-3333-3333-3333-333333333331'),
   ('Projet démo 2','33333333-3333-3333-3333-333333333332');
+-- Comme en production (relevé du 23/10/2026) : Moreau et Nguyen ont un manager (Dubois) ; 3 temps de
+-- démonstration (2 validés, 1 soumis), sans auteur ni validation connus.
+update public.collaborateurs set manager_id = '22222222-2222-2222-2222-222222222222'
+ where id in ('22222222-2222-2222-2222-222222222221', '22222222-2222-2222-2222-222222222223');
+insert into public.temps (collaborateur_id, projet_id, date_saisie, heures, statut)
+select '22222222-2222-2222-2222-222222222221'::uuid, id, current_date - 5, 6.5, 'valide' from public.projets where nom = 'Projet démo 1'
+union all select '22222222-2222-2222-2222-222222222221', id, current_date - 4, 7, 'valide' from public.projets where nom = 'Projet démo 1'
+union all select '22222222-2222-2222-2222-222222222223', id, current_date - 3, 4, 'soumis' from public.projets where nom = 'Projet démo 2';
 insert into auth.users (id, email) values ('11111111-1111-1111-1111-111111111111','sgi@gmx.fr');
