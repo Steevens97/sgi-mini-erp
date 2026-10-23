@@ -1,97 +1,104 @@
-# Module RH — plan (branche `preparation-rh`, rien de déployé)
+# Module RH — plan (branche `preparation-rh-main`, issue de main ; rien de déployé)
 
-Préparé le 23/10/2026. Ce document ne modifie ni la base ni le site. Il sera transformé en migration et en
-écrans seulement après le déploiement réussi du module Commercial et l'accord de l'utilisateur.
+Mis à jour le 23/10/2026 à partir de `main` (43de3ce : 7 migrations appliquées, Commercial déployé).
+Première version conservée dans l'historique de la branche `preparation-rh`. Aucune migration ni écran
+ne sera écrit avant l'accord de l'utilisateur sur les décisions de la section 6.
 
-## 1. Périmètre
+## 1. État constaté (lecture seule, 23/10/2026)
 
-| Partie | Contenu |
+- Fiches : Dubois (Manager), Moreau et Nguyen (rattachées à un manager). Le compte `sgi@gmx.fr` (admin)
+  n'est rattaché à **aucune** fiche.
+- Projets : « Refonte Axians » et « Audit Bertin », en cours, **sans devis** (démonstration).
+- Temps : 3 lignes de démonstration (2 validées, 1 soumise), aucune facturée.
+- Règles en place : `collaborateurs` lisible par soi / manager / admin, écrite par l'admin, colonne
+  `taux_horaire` retirée du droit SELECT de `authenticated` ; `projets` et `temps` « admin seulement » ;
+  `clients` lecture admin/manager, écriture admin (Commercial).
+- Automatisme Commercial en place : devis accepté → client si besoin → projet lié (un seul par devis,
+  index `projets_un_par_devis`) → prospect gagné ; seconde acceptation sans effet ; avenant rattaché au
+  projet du devis initial. **Le module RH ne crée aucun second mécanisme.**
+- Relations réelles : supprimer un projet ou une fiche **efface ses temps en cascade** (ON DELETE CASCADE).
+- Écran Utilisateurs actuel : un taux laissé vide devient 0 → à corriger (aucun taux attribué à la place
+  de l'utilisateur).
+- Inventaire restant à relever avant la migration : `profiles`, `conges`, `notes_de_frais`, `relances`
+  (leurs liens vers `collaborateurs` conditionnent les protections) → `tests-reels/diagnostic_tables_rh.sql`.
+
+## 2. Plan en cinq lignes
+
+1. Relever (lecture seule) les 4 dernières tables, aligner la base d'essai, puis écrire UNE migration RH
+   compatible avec le site actuel : règles RLS de `projets` et `temps`, protections en base (pas de
+   suppression d'un projet ou d'une fiche ayant des temps, pas d'auto-management ni de boucle hiérarchique,
+   cycle de vie des temps, temps facturé figé, cumul journalier), autotest annulé à la fin.
+2. Écrans RH : fiches (création et modification admin, manager en liste déroulante filtrée, taux
+   obligatoire lu et écrit côté serveur avec la clé secrète uniquement sur l'écran d'édition admin),
+   projets (liste, statut, création manuelle admin si retenue), « Mes temps », « Validation ».
+3. Votre fiche personnelle et le rattachement de `sgi@gmx.fr` sans passer par une fiche de démonstration.
+4. Preuves : base d'essai (rôles, fraudes de propriétaire/projet/statut, cascades, taux, sessions
+   révoquées, lien Commercial), appels directs à Supabase, navigateur local puis en ligne ; non-régression
+   Utilisateurs et Commercial ; comparaison complète des données avant/après.
+5. Déploiement en deux temps (migration vérifiée, puis écrans), nettoyage des seuls éléments de test,
+   trois vérifications manuelles dont une requête exécutée avec la vraie session d'un collaborateur.
+
+## 3. Protections en base prévues (sans nouvelle colonne)
+
+| Protection | Moyen |
 |---|---|
-| Fiches collaborateurs | Liste, création et modification des fiches (admin) ; consultation (manager : toutes, collaborateur : la sienne). |
-| Taux horaires | Saisie et lecture **uniquement** sur l'écran d'édition admin, côté serveur avec la clé secrète, après `exigerAdmin()`. Jamais transmis ailleurs. |
-| Projets | Consultation et changement de statut (en_cours → termine / annule). **Aucune création à partir d'un devis** : c'est déjà l'automatisme du module Commercial (déclencheur `devis_apres_modification`, un seul projet par devis, index `projets_un_par_devis`). |
-| Saisie des temps | Le collaborateur saisit ses heures sur un projet en cours (brouillon), les soumet ; le manager valide ou renvoie ; l'admin voit tout. |
+| Pas son propre manager | contrainte `manager_id <> id` |
+| Pas de boucle hiérarchique (A → B → A) | déclencheur qui remonte la chaîne des managers |
+| Suppression d'une fiche ou d'un projet ayant des temps | déclencheur BEFORE DELETE qui refuse, même depuis le tableau de bord ou la clé secrète |
+| Taux horaire | droits de colonnes inchangés ; aucune vue ni fonction appelable avec un jeton ne le renvoie (assertion) ; taux obligatoire et ≥ 0 à l'écran |
+| Temps : propriétaire | `collaborateur_id = mon_collaborateur_id()` imposé par la règle, sauf exception validée (D2) |
+| Temps : changement de projet, de collaborateur ou de facture | interdit après soumission ; `facture_id` posé uniquement par le futur module Finance (clé secrète) ; temps facturé non modifiable ni supprimable |
+| Temps : projet | seulement un projet `en_cours` (un projet terminé ou annulé n'accepte plus de temps) |
+| Auto-validation | refusée en base : le valideur n'est jamais le collaborateur du temps |
+| Projets lus par un collaborateur | vue à colonnes explicites (id, nom, statut, nom du client si D1 le retient) ; aucune coordonnée client |
 
-Hors périmètre (modules suivants) : congés et soldes (Absences), notes de frais, facturation des temps
-(Finance, qui posera `temps.facture_id`), relances.
+## 4. Projets et lien Commercial (vérifications prévues)
 
-## 2. Ce qui existe déjà et qu'on ne refait pas
+- Deux acceptations du même devis : un seul client, un seul projet (déjà prouvé en ligne, rejoué ici).
+- Avenant : reste lié au projet du devis initial.
+- Devis accepté : jamais repassé à refusé.
+- Aucune action RH ne modifie `projets.devis_id`, `projets.client_id` d'un projet issu d'un devis, ni un
+  document commercial.
 
-- Projets créés automatiquement à l'acceptation d'un devis (Commercial), clients créés de même.
-- Règles RLS `collaborateurs` (migration 20261023100000) : je vois ma fiche, admin et manager voient tout,
-  seul l'admin écrit ; droit de colonne `taux_horaire` retiré à `authenticated`.
-- Fonctions de session : `acces_actif`, `mon_role`, `mon_collaborateur_id`, `est_admin` (seules appelables
-  avec un jeton). Toute nouvelle fonction : `service_role` seulement.
-- `projets` et `temps` : règle « admin seulement » (migration 20261023120000), à remplacer par balayage.
+## 5. Écrans
 
-## 3. Règles proposées (une migration : `AAAAMMJJHHMMSS_rh_projets_temps.sql`)
+- RH → Collaborateurs : liste sans taux ; fiche ; « Nouvelle fiche » / « Modifier » (admin) ; taux
+  uniquement sur l'écran de modification admin.
+- RH → Projets : liste filtrable par statut ; changement de statut ; « Nouveau projet » (admin, si D1).
+- RH → Mes temps : saisie (projet en liste déroulante limitée aux projets ouverts), soumission.
+- RH → Validation (valideurs) : temps soumis, « Valider » / « Renvoyer ».
 
-### Projets
-- Lecture : admin et manager, toutes les colonnes ; collaborateur, par une vue `rh_projets` (id, nom, statut)
-  limitée aux projets **en cours** — ni client, ni devis, ni montants.
-- Écriture : admin et manager peuvent changer le **statut** seulement (droit de colonne). Création directe
-  d'un projet : voir question Q1. Suppression : refusée s'il existe du temps saisi.
-- Les colonnes `client_id` et `devis_id` d'un projet créé par le Commercial ne sont jamais modifiables.
+## 6. Décisions métier à prendre (propositions pour SG Ingénierie)
 
-### Temps
-- Statuts : brouillon → soumis → valide ; soumis → brouillon (renvoi par le manager) ; valide = figé.
-  Imposé par déclencheur (aussi depuis le tableau de bord), comme pour les devis.
-- Collaborateur : crée, modifie et supprime **ses** lignes en brouillon (`collaborateur_id = mon_collaborateur_id()`,
-  imposé par la base et non par l'écran), sur un projet en cours, puis les soumet.
-- Manager : lit et valide les temps de **son équipe** (`collaborateurs.manager_id = mon_collaborateur_id()`),
-  pas les siens (voir Q3). Admin : tout.
-- Contrôles en base : heures > 0 ; somme des heures d'un collaborateur sur une journée ≤ 24 ; date de saisie
-  pas dans le futur ; projet en cours au moment de la saisie ; une fois `facture_id` posé (Finance),
-  plus aucune modification.
-- Un compte sans fiche (`collaborateur_id` vide) ne peut rien saisir : avertissement visible à l'écran.
+- **D1 — Projets sans devis et liste visible.** Proposition : création manuelle **par l'admin seulement**
+  (missions internes, avant-vente, projets historiques comme les deux projets de démonstration) ; chaque
+  collaborateur voit **tous les projets en cours** avec le nom du client (sans coordonnées), sans table
+  d'affectation.
+- **D2 — Saisie pour autrui et corrections.** Proposition : chacun saisit ses propres temps ; l'admin peut
+  saisir pour un collaborateur (absence, régularisation) ; le manager ne saisit pas pour autrui. Brouillon
+  : modifiable par son auteur ; soumis : le valideur peut le **renvoyer** en brouillon (correction par
+  l'auteur) ; validé : seul l'admin peut le **dévalider** s'il n'est pas facturé ; facturé : figé.
+- **D3 — Qui valide.** Proposition : le manager direct (`manager_id`) valide les temps de son équipe ; les
+  temps d'un manager sont validés par son propre manager, à défaut par l'admin ; personne ne valide ses
+  propres temps — les temps de l'admin (seul admin aujourd'hui) seraient validés par un manager désigné
+  comme son manager sur sa fiche, sinon restent soumis.
+- **D4 — Pas de saisie, rétroactivité, cumul.** Proposition : pas de 0,25 h ; saisie de J-31 à aujourd'hui
+  (au-delà : admin) ; jamais dans le futur ; au plus 12 h par jour et par collaborateur, toutes lignes
+  confondues (missions de chantier, MOEx ou drone comprises), refus au-delà avec un message en français.
+- **D5 — Traçabilité et départs (nouvelles colonnes, à approuver).** Proposition : `temps.valide_par`
+  (→ collaborateurs) et `temps.valide_le` (date et heure) posés par la base à la validation ;
+  `collaborateurs.date_sortie` (facultative) : après cette date, plus de nouveaux temps et la fiche
+  disparaît des listes de saisie, **au lieu de la supprimer**. Les projets n'ont pas besoin de champ
+  d'archivage : les statuts `termine` / `annule` existants suffisent.
 
-### Taux horaires (règle de l'utilisateur, inchangée)
-- Aucune fonction SQL appelable avec un jeton ne renvoie un taux ; l'assertion de 20261023130000 reste active.
-- Écran admin « Modifier la fiche » : lecture et écriture du taux par une action serveur (clé secrète)
-  après `exigerAdmin()` ; le taux n'apparaît sur aucun autre écran, ni dans les listes, ni dans les temps.
-- Taux 0 accepté (cas réel « pas de taux »), négatif refusé.
+## 7. Tests et livraison prévus
 
-## 4. Écrans
-
-- **RH → Collaborateurs** : liste (nom, poste, manager, accès) ; fiche ; « Nouvelle fiche » et « Modifier »
-  (admin) ; le taux uniquement sur l'écran de modification admin.
-- **RH → Projets** : liste filtrable par statut, projets d'essai marqués ESSAI ; changement de statut
-  (admin, manager).
-- **RH → Mes temps** : semaine en cours, saisie par projet et par jour, total, bouton « Soumettre la semaine ».
-- **RH → Validation** (manager, admin) : temps soumis de l'équipe, « Valider » / « Renvoyer ».
-
-## 5. Vérifications avant d'écrire la migration
-
-1. Résultat de `tests-reels/diagnostic_tables.sql` (lecture seule, dans le SQL Editor) pour connaître les
-   types exacts de `temps.heures`, `projets`, `collaborateurs` et leurs contraintes — le socle d'essai sera
-   aligné **avant** d'écrire la moindre règle (leçon de l'incident du 23/10).
-2. Module Commercial déployé (les projets d'essai `[ESSAI]` servent aux tests de saisie des temps).
-
-## 6. Tests prévus
-
-- Base d'essai locale (schéma aligné) : rôles × actions (collaborateur, manager d'équipe, manager hors
-  équipe, admin, admin provisoire, jeton révoqué), transitions de statut, 24 h/jour, projet terminé, temps
-  facturé figé, taux illisible pour tous les jetons.
-- `tests_verrouillage.py` étendu : `projets` et `temps` sortent des « modules fermés », tous les autres
-  contrôles conservés (sessions révoquées, mots de passe provisoires, taux, Finance/Absences fermés).
-- Navigateur local puis en ligne : comptes jetables `@exemple.invalid`, projets `[ESSAI]` uniquement,
-  nettoyage complet ; `instantane.py` identique avant/après.
-
-## 7. Déploiement (même méthode que le Commercial)
-
-1. Commit sur `main` contenant uniquement la migration RH → « Supabase Preview » vert et version présente
-   dans `migrations_appliquees()`.
-2. Ensuite seulement, publication des écrans.
-3. Trois contrôles simples donnés à l'utilisateur.
-
-## 8. Questions pour l'utilisateur (aucune colonne ajoutée sans accord)
-
-- **Q1** — Projets sans devis (projets internes, avant-vente) : faut-il permettre à l'admin d'en créer à la
-  main ? (Sinon, seuls les devis acceptés créent des projets.)
-- **Q2** — Traçabilité de la validation : ajouter `temps.valide_par` et `temps.valide_le` (nouvelles
-  colonnes, à approuver) ou s'en passer ?
-- **Q3** — Le manager valide-t-il ses propres temps, ou est-ce l'admin (ou son propre manager) ?
-- **Q4** — Pas de saisie : au quart d'heure (0,25 h) ou libre (2 décimales) ? Saisie possible sur combien de
-  jours en arrière ?
-- **Q5** — Un collaborateur doit-il voir **tous** les projets en cours, ou seulement ceux auxquels il est
-  affecté ? (La seconde option demande une table ou une colonne d'affectation : à approuver.)
+- Base d'essai alignée sur Supabase (13 tables relevées) : rôles × actions, fraudes (changer le
+  propriétaire, le projet, le statut, la facture par l'API), cascades refusées, taux illisible
+  (colonne, `select=*`, filtre, tri, jointure, vue) pour tous les jetons, sessions révoquées et mot de
+  passe provisoire, lien Commercial.
+- `tests_verrouillage.py` étendu (projets et temps sortent des « modules fermés », Finance et Absences
+  restent fermés) ; parcours Commercial rejoué (non-régression) ; écran Utilisateurs 45/45.
+- Preuve « vraie session collaborateur » : une page de contrôle dans l'application exécute, avec la
+  session de la personne connectée, une lecture de `taux_horaire` et affiche le refus de la base.
+- Supabase : vérification d'un temps par le Table Editor (liens `collaborateur_id` et `projet_id`).
