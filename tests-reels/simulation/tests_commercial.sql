@@ -274,6 +274,10 @@ select essai.refus('devis accepté : nouvelle version refusée (avenant obligato
   $q$select public.creer_nouvelle_version_devis(id,'aaaaaaaa-0000-0000-0000-000000000002') from public.devis where remplace_devis_id='dddddddd-0000-0000-0000-000000000001'$q$);
 select essai.refus('devis accepté : passage à « remplacé » refusé',
   $q$update public.devis set statut='remplace' where remplace_devis_id='dddddddd-0000-0000-0000-000000000001'$q$);
+select essai.refus('devis accepté : passage à « refusé » refusé (décision de l''utilisateur : avenant)',
+  $q$update public.devis set statut='refuse' where remplace_devis_id='dddddddd-0000-0000-0000-000000000001'$q$);
+select essai.refus('devis accepté : nouvelle décision « refusé » par la fonction de service refusée',
+  $q$select public.decider_devis(id,'aaaaaaaa-0000-0000-0000-000000000002','refuse') from public.devis where remplace_devis_id='dddddddd-0000-0000-0000-000000000001'$q$);
 select essai.refus('prospect gagné : repasser à « perdu » refusé',
   $q$update public.prospects set statut='perdu' where id='cccccccc-0000-0000-0000-000000000001'$q$);
 
@@ -452,6 +456,53 @@ select essai.ok('session révoquée + filtre « piège » (erreur si une ligne c
   essai.valeur($q$select count(*) from public.commercial_prospects where 1 / (length(nom) - length(nom)) = 1$q$));
 select essai.ok('session révoquée + filtre piège sur les lignes de devis : aucune ligne, aucune erreur',
   essai.valeur($q$select count(*) from public.commercial_devis_lignes where 1 / (montant_ht - montant_ht) = 1$q$) = '0');
+reset role;
+
+
+-- ===================== NUMÉROTATION (copie exacte de prochain_numero) =====================
+select essai.ok('devis réels : compteur « devis_AAAA » (jamais « devis_AAAA_AAAA »)',
+  (select count(*) from public.compteurs where cle ~ '^devis_[0-9]{4}$') = 1
+  and (select count(*) from public.compteurs where cle ~ '^devis_[0-9]{4}_[0-9]{4}$') = 0,
+  (select string_agg(cle || '=' || valeur, ', ' order by cle) from public.compteurs));
+select essai.ok('devis d''essai : compteur distinct « essai_devis_AAAA »',
+  (select count(*) from public.compteurs where cle ~ '^essai_devis_[0-9]{4}$') = 1);
+select set_config('timezone', 'Pacific/Kiritimati', false);
+insert into public.devis (id, prospect_id, regime_tva, territoire_tva, taux_tva, criteres_tva, type_mission)
+values ('dddddddd-0000-0000-0000-0000000000a1', 'cccccccc-0000-0000-0000-000000000001', 'taxable', 'MQ', 8.5,
+        '{"nature_mission":"prestation_intellectuelle","statut_client":"assujetti_france"}', 'conseil');
+insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire) values ('dddddddd-0000-0000-0000-0000000000a1', 'Mission', 1, 100);
+set role service_role;
+select public.emettre_devis('dddddddd-0000-0000-0000-0000000000a1', 'aaaaaaaa-0000-0000-0000-000000000002', essai.emetteur(), 'v1');
+reset role;
+select essai.ok('session en fuseau UTC+14 : année et date d''émission prises en Martinique',
+  (select numero like 'DEV-' || to_char(now() at time zone 'America/Martinique', 'YYYY') || '-%'
+          and date_emission = (now() at time zone 'America/Martinique')::date from public.devis where id = 'dddddddd-0000-0000-0000-0000000000a1'),
+  (select numero || ' / ' || date_emission from public.devis where id = 'dddddddd-0000-0000-0000-0000000000a1'));
+select essai.ok('fuseau de la connexion inchangé après l''émission (Pacific/Kiritimati)', current_setting('timezone') = 'Pacific/Kiritimati');
+select set_config('timezone', 'UTC', false);
+-- Limite de 9 999 : blocage explicite, rien d'attribué
+create table essai.compteur_sauve as select cle, valeur from public.compteurs where cle ~ '^devis_[0-9]{4}$';
+update public.compteurs set valeur = 9999 where cle ~ '^devis_[0-9]{4}$';
+insert into public.devis (id, prospect_id, regime_tva, territoire_tva, taux_tva, criteres_tva, type_mission)
+values ('dddddddd-0000-0000-0000-0000000000a2', 'cccccccc-0000-0000-0000-000000000001', 'taxable', 'MQ', 8.5,
+        '{"nature_mission":"prestation_intellectuelle","statut_client":"assujetti_france"}', 'conseil');
+insert into public.devis_lignes (devis_id, designation, quantite, prix_unitaire) values ('dddddddd-0000-0000-0000-0000000000a2', 'Mission', 1, 100);
+set role service_role;
+select essai.refus('9 999e numéro atteint : émission refusée avec un message en français',
+  $q$select public.emettre_devis('dddddddd-0000-0000-0000-0000000000a2','aaaaaaaa-0000-0000-0000-000000000002',essai.emetteur(),'v1')$q$);
+reset role;
+select essai.ok('message affiché : « limite de 9 999 documents »',
+  (select detail like 'Numérotation impossible : la limite de 9 999 documents « DEV »%' from essai.resultats order by n desc limit 1),
+  (select detail from essai.resultats order by n desc limit 1));
+select essai.ok('après le refus : devis toujours brouillon, compteur toujours à 9999',
+  (select statut = 'brouillon' and numero is null from public.devis where id = 'dddddddd-0000-0000-0000-0000000000a2')
+  and (select valeur from public.compteurs where cle ~ '^devis_[0-9]{4}$') = 9999);
+select essai.ok('compteur d''essai non concerné par la limite du compteur réel',
+  (select valeur < 9999 from public.compteurs where cle ~ '^essai_devis_[0-9]{4}$'));
+update public.compteurs c set valeur = s.valeur from essai.compteur_sauve s where c.cle = s.cle;
+select essai.qui('aaaaaaaa-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000002');
+set role authenticated;
+select essai.refus('attribuer_numero non appelable avec un jeton', $q$select public.attribuer_numero('devis','DEV')$q$);
 reset role;
 
 -- ===================== Données existantes =====================

@@ -2,7 +2,7 @@
 # Recrée la base d'essai locale et rejoue toutes les migrations dans l'ordre.
 # Usage : tests-reels/simulation/rejouer.sh [fichier de tests SQL...]
 set -e
-H=/var/tmp/pg-essai; P=5499; R="$(cd "$(dirname "$0")/../.." && pwd)"
+H=/var/tmp/pg-essai; P=${PORT_ESSAI:-5499}; R="$(cd "$(dirname "$0")/../.." && pwd)"
 psql -h $H -p $P -U postgres -qAtc "drop database if exists essai" -c "create database essai" >/dev/null
 for role in anon authenticated service_role supabase_auth_admin; do
   psql -h $H -p $P -U postgres -qAtc "drop role if exists $role" 2>/dev/null || true

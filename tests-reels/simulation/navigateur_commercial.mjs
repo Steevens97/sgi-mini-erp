@@ -42,6 +42,18 @@ async function connexion(email, mdp) {
 const attendre = (page, texte) => page.waitForSelector(`text=${texte}`, { timeout: 20000 });
 
 try {
+  if (MODE === "limite") {
+    console.log("== Limite de 9 999 numéros : message compréhensible à l'écran");
+    const m = await connexion("manager@exemple.invalid", "Essai-Manager-2026!");
+    const id = sql("select id from public.devis where statut = 'brouillon' and not essai order by created_at desc limit 1");
+    await m.goto(B + `/commercial/devis/${id}`);
+    await m.click("button:has-text('Émettre')");
+    await m.waitForSelector("[role=status]", { timeout: 30000 });
+    const message = await m.textContent("[role=status]");
+    verifier("message en français, sans erreur technique de doublon", message.includes("limite de 9 999 documents") && !/duplicate|unique|23505/i.test(message), message.trim());
+    verifier("devis resté brouillon, sans numéro", sql(`select statut || '/' || coalesce(numero, 'aucun') from public.devis where id = '${id}'`) === "brouillon/aucun");
+    throw new Error("FIN");
+  }
   if (MODE === "reel") {
     console.log("== Mode réel (coordonnées réelles vides) : émission bloquée");
     const m = await connexion("manager@exemple.invalid", "Essai-Manager-2026!");

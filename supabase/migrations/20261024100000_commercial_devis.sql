@@ -17,10 +17,16 @@ begin
   if v_src is null then
     raise exception 'Commercial : prochain_numero(p_cle, p_prefixe) introuvable';
   end if;
-  -- La numérotation doit être transactionnelle (table compteurs, pas de séquence) : sinon un
-  -- échec après l'attribution perdrait un numéro.
-  if v_src not ilike '%compteurs%' or v_src ilike '%nextval%' then
-    raise exception 'Commercial : prochain_numero n''est pas fondé uniquement sur la table compteurs';
+  -- Définition EXAMINÉE le 23/10/2026 (transmise par l'utilisateur, testée à l'identique sur la base
+  -- d'essai) : clé = p_cle || '_' || année de current_date, ligne de compteurs verrouillée par l'UPDATE,
+  -- aucune séquence → annulée avec la transaction ; numéro sur 4 chiffres. Empreinte du corps (espaces
+  -- normalisés) : si la fonction a changé depuis cet examen, la migration refuse de s'appliquer.
+  if md5(btrim(regexp_replace(v_src, '\s+', ' ', 'g'))) <> '72f806be71e542bd2983dd16ce16b808' then
+    raise exception 'Commercial : prochain_numero diffère de la définition examinée le 23/10/2026 ; nouvel examen nécessaire';
+  end if;
+  if exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+              where n.nspname = 'public' and p.proname = 'prochain_numero' and p.prosecdef) then
+    raise exception 'Commercial : prochain_numero est devenue SECURITY DEFINER ; nouvel examen nécessaire';
   end if;
   select count(*) into v_nb from (
     select devis_id from public.projets where devis_id is not null group by devis_id having count(*) > 1) d;
@@ -409,6 +415,34 @@ as $$
     'avenant_de', (select d.numero from public.devis d where d.id = p_devis.avenant_du_devis_id));
 $$;
 
+-- Attribution d'un numéro : SEUL point d'appel de prochain_numero, uniquement depuis les opérations
+-- transactionnelles prévues (émission). Pendant l'appel, fuseau America/Martinique (clause SET : rétabli
+-- à la sortie de la fonction, la connexion n'est pas modifiée) → l'année du numéro est celle de la
+-- Martinique. Blocage explicite avant le 10 000e numéro d'une année (prochain_numero tronque à 4 chiffres).
+create or replace function public.attribuer_numero(p_cle text, p_prefixe text)
+returns text
+language plpgsql
+set search_path = public
+set timezone = 'America/Martinique'
+as $$
+declare
+  v_cle text;
+  v_valeur integer;
+begin
+  if p_cle not in ('devis', 'essai_devis') then
+    raise exception 'Numérotation : clé « % » non prévue', p_cle;
+  end if;
+  v_cle := p_cle || '_' || to_char(current_date, 'YYYY');  -- même règle que prochain_numero
+  -- Verrou de la ligne du compteur : le contrôle de limite et l'incrément ne peuvent pas être doublés.
+  select valeur into v_valeur from public.compteurs where cle = v_cle for update;
+  if coalesce(v_valeur, 0) >= 9999 then
+    raise exception 'Numérotation impossible : la limite de 9 999 documents « % » pour l''année % est atteinte. Aucun numéro n''a été attribué. Contactez l''administrateur.',
+      p_prefixe, to_char(current_date, 'YYYY');
+  end if;
+  return public.prochain_numero(p_cle, p_prefixe);
+end
+$$;
+
 -- Cumul d'une mission : devis initial + avenants acceptés + l'avenant examiné ne peut pas être négatif.
 -- VOLATILE (et non STABLE) : appelée après le verrou du devis initial, elle doit voir les
 -- acceptations validées entre-temps par une autre transaction.
@@ -715,18 +749,13 @@ begin
       raise exception 'Émission impossible : seul un avenant peut avoir un total négatif';
     end if;
 
-    -- Numéro. Devis d'essai (indicateur non modifiable) : compteur d'essai propre à ce module, dans
-    -- la table compteurs (annulé avec la transaction) — la fonction réelle n'est JAMAIS appelée par
-    -- un essai, ni par l'autotest de cette migration. Devis réel : prochain_numero.
-    -- Clé et préfixe du devis réel à confirmer après examen de la définition réelle de prochain_numero.
-    v_annee := to_char(now() at time zone 'America/Martinique', 'YYYY');
+    -- Numéro, exclusivement par prochain_numero (via attribuer_numero : heure de Martinique,
+    -- limite de 9 999). Devis réel : clé « devis », préfixe « DEV ». Devis d'essai (indicateur non
+    -- modifiable) : clé « essai_devis », préfixe « ESSAI-DEV » — compteur distinct du compteur réel.
     if new.essai then
-      insert into public.compteurs (cle, valeur) values ('essai_devis_' || v_annee, 1)
-      on conflict (cle) do update set valeur = public.compteurs.valeur + 1
-      returning valeur into v_nb;
-      new.numero := 'ESSAI-DEV-' || v_annee || '-' || lpad(v_nb::text, 4, '0');
+      new.numero := public.attribuer_numero('essai_devis', 'ESSAI-DEV');
     else
-      new.numero := public.prochain_numero('devis_' || v_annee, 'DEV');
+      new.numero := public.attribuer_numero('devis', 'DEV');
     end if;
     new.date_emission := (now() at time zone 'America/Martinique')::date;
     new.emis_le := now();
@@ -1158,7 +1187,7 @@ begin
     'emettre_devis(uuid, uuid, jsonb, text)', 'enregistrer_pdf_devis(uuid, text, text, bigint)',
     'signaler_echec_pdf_devis(uuid, text)', 'declarer_envoi_devis(uuid, uuid, timestamptz, text, text)',
     'decider_devis(uuid, uuid, text)', 'creer_nouvelle_version_devis(uuid, uuid)',
-    'creer_avenant_devis(uuid, uuid)', 'appel_utilisateur()', 'controle_emetteur(jsonb, text)',
+    'creer_avenant_devis(uuid, uuid)', 'appel_utilisateur()', 'controle_emetteur(jsonb, text)', 'attribuer_numero(text, text)',
     'controle_destinataire(uuid)', 'controle_cumul_avenants(uuid, uuid, numeric)',
     'creer_prospect_essai(text, text, text, text, text, text)'] loop
     execute format('revoke all on function public.%s from public, anon, authenticated', v_fonction);

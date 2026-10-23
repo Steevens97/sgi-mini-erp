@@ -1,7 +1,6 @@
 -- Base d'ESSAI locale (jamais Supabase) : reconstitution simplifiée du socle pour rejouer
 -- les migrations et tester les déclencheurs. Les éléments Supabase (auth, storage, rôles)
--- sont des imitations minimales ; prochain_numero est une IMITATION (le vrai code n'est pas
--- connu à ce jour) : transactionnelle, via la table compteurs.
+-- sont des imitations minimales ; prochain_numero est la copie exacte de la définition réelle.
 
 create role anon nologin;
 create role authenticated nologin;
@@ -127,16 +126,27 @@ begin
   end loop;
 end $$;
 
--- IMITATION de prochain_numero (transactionnelle via compteurs)
-create function public.prochain_numero(p_cle text, p_prefixe text) returns text
-language plpgsql as $$
-declare v integer;
+-- prochain_numero : copie EXACTE de la définition réelle (transmise par l'utilisateur le 23/10/2026)
+CREATE OR REPLACE FUNCTION public.prochain_numero(p_cle text, p_prefixe text)
+ RETURNS text
+ LANGUAGE plpgsql
+AS $function$
+declare
+  v_annee  text := to_char(current_date, 'YYYY');
+  v_cle    text := p_cle || '_' || v_annee;
+  v_valeur integer;
 begin
-  insert into public.compteurs (cle, valeur) values (p_cle, 1)
-  on conflict (cle) do update set valeur = public.compteurs.valeur + 1
-  returning valeur into v;
-  return p_prefixe || '-' || to_char(now(), 'YYYY') || '-' || lpad(v::text, 4, '0');
-end $$;
+  insert into compteurs (cle, valeur) values (v_cle, 0)
+  on conflict (cle) do nothing;
+
+  update compteurs
+     set valeur = valeur + 1
+   where cle = v_cle
+  returning valeur into v_valeur;
+
+  return p_prefixe || '-' || v_annee || '-' || lpad(v_valeur::text, 4, '0');
+end;
+$function$;
 
 -- Déclencheur de création des profils (le tout premier compte devient admin)
 create function public.creer_profil() returns trigger language plpgsql security definer set search_path = public as $$
