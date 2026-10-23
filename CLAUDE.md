@@ -97,7 +97,10 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   page supprimée ensuite ; inscription publique coupée dans Supabase (disable_signup = true).
   Contrôle à refaire si besoin : GET /auth/v1/settings → disable_signup, et un vrai POST /auth/v1/signup refusé.
   Site en ligne sur Vercel (variables d'environnement saisies dans Vercel).
-- Étape 4 : migration sécurité (mon_role, mon_collaborateur_id, est_admin, RLS profiles/collaborateurs).
+- Étape 4 FAITE : migration 20261023100000 (mon_role, mon_collaborateur_id, est_admin en SECURITY
+  DEFINER ; RLS profiles/collaborateurs ; trigger anti-auto-rétrogradation). 42/42 contrôles API +
+  test navigateur sur https://sgi-mini-erp.vercel.app (anonyme, collaborateur, orphelin, manager, admin).
+  Comptes jetables : domaine @exemple.invalid, supprimés après tests ; ne jamais toucher sgi@gmx.fr.
 - Étape 5 : écran Utilisateurs ; puis comptes de test manager + collaborateur, reconnexion en collaborateur.
 
 ## Tests locaux dans le conteneur cloud
