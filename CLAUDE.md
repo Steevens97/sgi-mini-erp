@@ -283,7 +283,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Fiche réelle de l'utilisateur : attend ses informations et son taux confirmé.
 - Module Finance : DÉPLOYÉ (temps 1 et 2, 24/10/2026) ; émission réelle bloquée (coordonnées et conditions de paiement
   à confirmer ; facturation électronique : documentation provisoire) ; réception technique validée (24/10/2026).
-  Absences et notes de frais : en préparation (plan à approuver). Relances automatiques : non activées.
+- Module Absences et notes de frais : TEMPS 1 FAIT (24/10/2026, migration seule, commit c981468 sur main) ; écrans NON
+  publiés (temps 2 en attente de l'accord de l'utilisateur) — voir la section « Module Absences ». Relances automatiques : non activées.
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
 - RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (24/10/2026) : module RH et correctif 20261026100000.
@@ -469,6 +470,93 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 - Ordre de déploiement prévu : temps 1 = commit de la migration seule (le site en ligne reste compatible : ses lectures de
   projets et temps nomment leurs colonnes, il ne lit pas les factures) ; temps 2 = écrans, après « Supabase Preview » vert
   et 20261027100000 dans migrations_appliquees(). Chaque temps sur accord explicite de l'utilisateur.
+
+## Module Absences et notes de frais (migration 20261028100000) — TEMPS 1 FAIT, écrans non publiés
+- TEMPS 1 FAIT (accord de l'utilisateur, 24/10/2026) : commit c981468 sur main (parent 4af2157) = migration SEULE,
+  créée depuis main (pas de fusion de la branche) ; vérifié avant l'envoi : 1 fichier ajouté, empreinte md5
+  bd2b87c5d2d55811b31d02e40c23fa7e = version testée, aucun écran, aucune ancienne migration, aucun secret ; rejouée en local.
+  Supabase Preview vert, Vercel vert ; 11 migrations dans migrations_appliquees() (autotest passé en production).
+  Essais du stockage RÉEL (`essais_stockage_absences.mjs`) 29/29 : dépôt et liens directs refusés aux jetons, lien signé
+  rejoué (avec et sans x-upsert) refusé, écrasement d'un fichier rattaché refusé, taille/type/dossier différents refusés
+  par la base, 10 Mo et type texte refusés par le stockage, lien temporaire expiré refusé. Site en ligne (ancienne
+  version) : `tests_verrouillage.py` 353/353 (mode Absences), écran Utilisateurs 45/45, parcours RH 50/50, Commercial 57/57,
+  Finance 53/53. `instantane_complet.py` : 19/19 identiques (13 tables en colonnes d'origine, comptes, espaces, fichiers) ;
+  changements prévus constatés seulement dans les nouveaux éléments : fiches existantes à 25 j « repris », RTT 0
+  « a_renseigner », bucket justificatifs limité (10 Mo, PDF/JPEG/PNG), défaut de solde_conges à 0, droits et règles.
+  0 reste : un seul compte (sgi@gmx.fr), 0 fiche jetable, 0 congé, 0 note, 0 compteur, 0 fichier dans les 3 espaces.
+- Arbitrages de l'utilisateur (24/10/2026, ne plus les redemander) : nombre de jours SAISI (demi-journées, pas de 0,5,
+  > 0, dans la limite de la période ; jour unique après-midi → midi refusé), aucun calendrier des jours fériés (estimation
+  lundi–vendredi affichée, jamais enregistrée) ; congés payés sur solde_conges, RTT sur solde_rtt (aucune acquisition
+  automatique, jamais de prélèvement croisé), sans solde : rien ; prélèvement UNE fois à la validation, jamais au-delà du
+  solde ; ajustements admin motivés et tracés ; personne ne décide de ses propres congés NI de ses notes (admin compris ;
+  sans tiers : la demande reste « demandée ») ; congé validé jamais refusé ni annulé (limite v1) ; rétroactif = admin +
+  motif ; chevauchements refusés à la demi-journée (demandées et validées ; une refusée ne bloque rien) ; temps déjà saisis
+  sur la période = alerte précise, jamais de modification ; aucune absence après date_sortie (ni avant date_entree) ;
+  notes : montant TTC, catégories deplacement/repas/hebergement/carburant/fournitures/autre (précision obligatoire),
+  objet obligatoire (300 car.), justificatif PDF/JPEG/PNG ≤ 10 Mo OBLIGATOIRE, statut `refusee` (motif), note validée/
+  refusée/remboursée figée (contenu ET justificatif), remboursement DÉCLARÉ par l'admin (jamais sa propre note),
+  correction/annulation motivée avec historique. Aucune relance automatique.
+- Précisions du 24/10/2026 (après la 1re préparation, ne plus les redemander) : (1) soldes existants conservés ; nouvelle
+  fiche à 0 jour (défaut de la colonne passé de 25 à 0, insertion avec un solde refusée), « Solde à renseigner » jusqu'à
+  la confirmation explicite de l'admin, tracée même à 0 (événement « confirmation ») ; (2) l'admin ne modifie JAMAIS le
+  contenu d'une note d'une autre personne (seule la personne concernée modifie sa note soumise ; sinon validation ou
+  refus motivé, puis nouvelle note) ; (3) l'autotest n'ignore aucun contrôle : la base ne lit le stockage QUE par
+  `abs_objets_stockes` (assertion), que l'autotest remplace le temps de sa transaction par une table temporaire de dépôts
+  simulés (définition rétablie et vérifiée par empreinte ensuite) ; le stockage réel est vérifié APRÈS application par
+  `tests-reels/essais_stockage_absences.mjs` (tous les contrôles doivent réussir AVANT le temps 2) ; (4) dépôt direct :
+  preuves de non-remplacement d'un fichier rattaché, de non-substitution et de refus du dossier d'autrui (requêtes
+  falsifiées dans le navigateur, liens rejoués, x-upsert) ; (5) parcours en ligne : alerte des temps saisis et dépôts
+  abandonnés (2e phase au moins 1 h après).
+- Soldes existants : congés payés INCHANGÉS (événement « repris », renseignés) ; RTT = 0 « droits non renseignés »
+  (événement « a_renseigner », ≠ absence de droits) ; historique initialisé avant la pose du déclencheur. Nouvelle fiche :
+  0 et 0, « a_renseigner » pour les deux. Renseigné = événement repris | ajustement | confirmation (abs_solde_renseigne ;
+  la vue `absences_soldes` réécrit la règle, un jeton ne pouvant exécuter aucune autre fonction) ; validation sur un solde
+  à renseigner refusée avec la mention « (solde à renseigner) » / « (droits RTT non renseignés) ».
+- Confidentialité : solde_conges n'est plus lisible par les jetons (lecture ouverte jusqu'ici à TOUS les managers :
+  fermée) ; soldes et historique seulement via la vue `absences_soldes` (soi, équipe directe du manager, admin) ;
+  insert/update des fiches par jeton : toutes les colonnes sauf les soldes (l'écran Utilisateurs reste compatible).
+  Congés et notes : lecture soi / équipe directe / admin ; AUCUNE écriture par jeton. Observation non modifiée : les
+  managers lisent toujours tous les temps (règle RH existante).
+- Écriture uniquement par fonctions de service (clé secrète) : abs_demander_conge, abs_decider_conge (verrou demande puis
+  fiche ; rejouée = « déjà décidée »), abs_ajuster_solde (valeur affichée vérifiée : refus si le solde a changé),
+  abs_creer_note (rejouée avec le même fichier = même note), abs_modifier_note, abs_decider_note,
+  abs_declarer_remboursement, abs_corriger_remboursement, abs_justificatif_rattache, abs_fichiers_orphelins,
+  supprimer_essais_absences. Contexte sgi.abs_* local à la transaction ; déclencheurs collaborateurs_absences_controle,
+  conges_controle, notes_de_frais_controle (tous les chemins, tableau de bord compris).
+- Justificatifs (bucket privé `justificatifs`, 10 Mo, PDF/JPEG/PNG) : la règle `justificatifs_admin_seulement` est
+  SUPPRIMÉE (plus aucun accès direct par jeton, même admin). Dépôt : le serveur vérifie session (acces_actif) et droits,
+  émet un lien signé pour UN chemin neuf `<fiche>/<uuid>.<ext>` ; le navigateur dépose ; le SERVEUR relit le fichier
+  (signature des premiers octets, taille, SHA-256) ; la BASE vérifie chemin/dossier, existence, taille et type stockés,
+  dépôt de moins de 30 min, fichier jamais rattaché ailleurs. Fichier refusé pour son contenu : supprimé seulement si la
+  base le dit non rattaché ; refus de la base : fichier gardé pour la nouvelle tentative. Dépôts abandonnés : > 1 h et
+  non rattachés (justificatif actuel ou historique), supprimés par un bouton admin. Consultation : note relue avec la
+  session (droits), empreinte revérifiée, lien temporaire 60 s jamais stocké ; anciens justificatifs consultables.
+- Essais : congés et notes d'une fiche @exemple.invalid marqués `essai` par la base (passer une fiche avec pièces de
+  l'essai au réel ou l'inverse est refusé) ; supprimer_essais_absences() (clé secrète) les supprime et rend les fichiers.
+  Proposition pour plus tard : `collaborateurs.essai` (non créée sans accord).
+- Écrans : /absences (mes soldes, demande avec estimation/alertes, mes demandes, à décider, autres), /absences/soldes
+  (admin ; « Solde à renseigner », confirmation = saisir la valeur même 0, avec motif), RH → Notes de frais
+  (/rh/notes-de-frais, consultation /rh/notes-de-frais/<id>/justificatif[?ancien=n] ; plus de « Corriger avant décision »).
+  Dépôt par le navigateur : PUT sur le lien signé avec la clé PUBLIQUE et `x-upsert: false`.
+  Confirmations persistantes en haut de page après décision (CONFIRMATIONS_ABSENCES).
+- Tests locaux (24/10/2026, après les précisions) : `rejouer.sh tests_absences.sql` puis `select count(*) filter (where ok),
+  count(*) from abse.resultats` : 197/197 ; `tests_concurrence_absences.sh` 16/16 (sans verrou de fiche : chevauchement et
+  doublon passent — preuve) ; `tests_absences_api.py` 95/95 ; `test_absences_martinique.sh` 6/6 × 3 horloges ;
+  `tests_justificatifs.mts` 22/22 ; autotest : 20 sabotages sur 20 arrêtés, chacun pour sa raison (dont 25 jours par défaut,
+  admin modifiant la note d'autrui, confirmation à 0 non tracée, lecture directe du stockage, dépôt de plus de 30 min,
+  justificatif rattaché listé comme abandonné) ; navigateur `navigateur_absences.mjs` 76/76 (dont 4 contournements par
+  requêtes falsifiées et lien rejoué) ; `essais_stockage_absences.mjs` 29/29 sur l'imitation locale ;
+  `parcours_absences_en_ligne.mjs` répété en local : 59/59 puis 2e phase 5/5 (dépôts vieillis d'1 h en base locale), aucun
+  reste. Non-régression : Commercial 135/135, 17/17, 30/30, PDF 14/14, numérotation piégée, passage d'année ; RH 155/155
+  (avec et sans la migration), 28/28, 5/5, 8/8 ; Finance 118/118, 15/15, 88/88, 6/6, PDF 19/19 ; compatibilité Utilisateurs
+  17/17 (avec et sans) ; navigateur Commercial 26/26, réel 4/4, limite 2/2, RH 49/49, Finance 54/54 et 21/21, taux 7/7 ;
+  répétitions locales : Utilisateurs 45/45, parcours RH 50/50, Finance 53/53, Commercial 57/57 ; `tests_verrouillage.py`
+  353/353 (mode Absences, local).
+- Ordre de déploiement prévu : temps 1 = commit de la migration SEULE (le site en ligne reste compatible : il ne lit ni
+  soldes, ni congés, ni notes ; l'écran Utilisateurs écrit des colonnes qui restent permises) ; temps 2 = écrans après
+  « Supabase Preview » vert, 20261028100000 dans migrations_appliquees(), `tests_verrouillage.py` (4c) et
+  `essais_stockage_absences.mjs` entièrement réussis. Après le temps 2 : `parcours_absences_en_ligne.mjs` (puis sa 2e phase
+  ≥ 1 h plus tard), `instantane_complet.py`. Chaque temps sur accord explicite de l'utilisateur.
 
 ## Tests locaux dans le conteneur cloud
 - Base d'essai PostgreSQL 16 : `/var/tmp/pg-essai` (port 5499), démarrage :
