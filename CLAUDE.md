@@ -280,7 +280,9 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 - Module Commercial : DÉPLOYÉ (23/10/2026), émission réelle bloquée (coordonnées et assurances à fournir) — voir la section dédiée.
 - Module RH : DÉPLOYÉ (temps 1 et 2, 24/10/2026) ; correctif du message de suppression de fiche DÉPLOYÉ
   (migration 20261026100000, commit 2a566fa sur main) — voir la section « Module RH ».
-  Fiche réelle de l'utilisateur : attend ses informations et son taux confirmé. Finance : pas commencé (accord requis).
+  Fiche réelle de l'utilisateur : attend ses informations et son taux confirmé.
+- Module Finance : migration 20261027100000 APPLIQUÉE (temps 1, 24/10/2026) ; écrans préparés sur la branche
+  `preparation-finance`, NON PUBLIÉS (temps 2 en attente d'accord) ; émission réelle bloquée (paramétrage à confirmer).
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
 - RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (24/10/2026) : module RH et correctif 20261026100000.
@@ -367,6 +369,97 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Production : `verifier_temps_existants.py avant|apres <fichier>` (lecture seule) autour du temps 1.
   `tests_verrouillage.py` détecte le module RH (projets et temps hors des modules fermés).
 
+## Module Finance (migration 20261027100000) — MIGRATION APPLIQUÉE (temps 1), ÉCRANS NON PUBLIÉS
+- TEMPS 1 FAIT (accord de l'utilisateur, 24/10/2026) : commit 8cf0852 sur main = migration seule (vérifié : un seul
+  fichier, aucun secret, identique à la version testée, 118/118 rejoué juste avant). Supabase Preview vert ; appliquée en ~40 s ; 10 migrations
+  dans migrations_appliquees(). Nouveaux champs présents et vides (projets : mode et tarifs vides, historique [] ; temps :
+  taux et montant facturés vides) ; aucune facture ; aucun compteur ; bucket privé `factures` (PDF, 10 Mo), vide.
+  `tests_verrouillage.py` (mode Finance) 275/275 (204 d'origine + 71 Finance) ; site encore en ancienne version :
+  parcours RH en ligne 50/50, Commercial en ligne 57/57, `ecran_utilisateurs.mjs` 45/45 (script corrigé : taux
+  obligatoire et liste des fiches sur /rh/collaborateurs depuis 127b824 — défauts du SCRIPT, pas de l'application) ;
+  `instantane_complet.py` : 17 éléments identiques, seuls ajouts l'espace `factures` (vide) ; `verifier_temps_existants`
+  10/10 ; 0 résidu d'essai ; aucun numéro réel consommé.
+- Ajustements demandés pour le temps 2 (24/10/2026) : le PDF CLIENT n'imprime aucun nom d'intervenant (annexe :
+  références non nominatives T-01…, date, projet, durée × tarif, montant) ; le détail nominatif reste dans l'espace admin
+  (fiche facture, aperçu) ; message de confirmation visible en haut de la fiche facture après la reprise du PDF, l'envoi,
+  le règlement et sa correction (texte fixe CONFIRMATIONS_FACTURE). Gabarit toujours `facture-v1` (aucune facture émise
+  avant cet ajustement).
+- Décisions de l'utilisateur (24/10/2026, ne plus les redemander) :
+  - périmètre v1 : facturation des projets explicitement « au temps passé » (`projets.mode_facturation` = temps_passe ;
+    forfait / non_facturable enregistrés mais non facturés ; vide = à définir = non facturable ; jamais déduit d'un devis) ;
+    AUCUN avoir, AUCUN statut « annulee », AUCUNE relance, paiement INTÉGRAL seulement, aucun email ni suivi bancaire ;
+  - tarif = tarif horaire de VENTE confirmé PAR PROJET (option A : identique pour tous les intervenants), à DATE D'EFFET,
+    distinct du coût interne : `collaborateurs.taux_horaire` n'est JAMAIS lu par la facturation (assertion conservée) ;
+    tarif > 0 obligatoire ; chaque temps est facturé au tarif contractuel en vigueur à sa date travaillée ;
+  - seuls les temps VALIDÉS et non facturés sont facturés ; les temps de l'admin (soumis/attestés) jamais (aucune exception) ;
+  - regroupement : un client + un mois, projets sélectionnables ; traitements de TVA incompatibles refusés (devis des
+    projets ≠ traitement de la facture) ; essais et réel jamais mélangés ;
+  - arrondi unique : montant de chaque temps = heures × tarif arrondi au centime ; ligne (projet × période tarifaire) =
+    somme des montants arrondis ; total HT = somme des lignes ; TVA = total HT × taux arrondi ; TTC = HT + TVA ;
+    l'écart avec « total des heures × tarif » est montré (aperçu, fiche, PDF), jamais corrigé en silence ;
+  - aperçu sans numéro ni réservation ; émission en UNE transaction (verrous : clé d'émission, projets en partage,
+    temps exclusifs ; recalcul ; empreinte de l'aperçu ; numéro ; rattachement ; instantané) ; aperçu périmé = refus ;
+    même clé d'émission (double clic, coupure réseau) = même facture ; PDF généré ENSUITE (reprise : même numéro, même
+    instantané) ; envoi impossible tant que le PDF n'est pas disponible ;
+  - envoi DÉCLARÉ (canal, destinataire) ≠ règlement DÉCLARÉ ; paiement partiel jamais enregistré (message explicite) ;
+    correction d'une déclaration de règlement : admin + motif, valeurs précédentes dans l'historique, facture inchangée ;
+  - paramétrage vide (`CONDITIONS_PAIEMENT_SG_INGENIERIE`, coordonnées) jusqu'à confirmation : émission réelle bloquée
+    (application ET base, `finance_controle_emetteur`), essais possibles avec des valeurs [DÉMO] ;
+  - facturation électronique : documentation PROVISOIRE (FACTURATION_ELECTRONIQUE_PROVISOIRE) tant que les textes
+    complets (DGFiP, BOFiP, Légifrance) ne sont pas vérifiés ; ne pas présenter la v1 comme adaptée à l'émission réelle.
+    Extraits officiels lus le 24/10/2026 (sites bloqués par le réseau du conteneur : impots.gouv.fr, bofip.impots.gouv.fr) :
+    réception 01/09/2026 pour tous ; émission PME/micro au plus tard 01/09/2027 ; Martinique, Guadeloupe, Réunion dans le
+    champ (facturation électronique ET e-reporting) ; ne rien conclure de la seule taille de l'entreprise.
+- Colonnes ajoutées (approuvées) :
+  - projets : mode_facturation, tarif_vente_ht numeric(10,2) (> 0), tarif_reference, tarif_date_effet, tarif_confirme_par,
+    tarif_confirme_par_nom, tarif_confirme_le (récapitulatif = DERNIER tarif confirmé, affiché avec sa date d'effet, « pas
+    encore applicable » s'il est futur), tarif_historique jsonb (périodes et corrections, ajout seul : une correction ajoute
+    un événement qui désigne la période remplacée ; la sélection ignore les périodes remplacées) ;
+  - factures : essai, instantane_emission, emise_par, emise_par_nom, emise_le, pdf_statut, pdf_chemin, pdf_empreinte,
+    pdf_taille, pdf_archive_le, pdf_erreur, cle_emission (unique), empreinte_apercu, historique (ajout seul, par la base),
+    date_reglement, mode_reglement, reference_reglement, reglement_declare_par, reglement_declare_par_nom, reglement_declare_le ;
+  - temps : taux_facture numeric(10,2), montant_facture_ht numeric(12,2) (posés à l'émission seulement, figés).
+- Tarif à date d'effet : nouveau tarif = date d'effet postérieure à la dernière ; refusé si un temps facturé est daté
+  de cette date ou après ; temps concernés confirmés par EMPREINTE (identité, date, heures : une modification qui garde le
+  même nombre de lignes rend la confirmation périmée) ; correction = dernier tarif seulement, motif, refusée si un temps
+  a été facturé à ce tarif. Changement de tarif et émission verrouillent le projet : jamais de période incohérente.
+- Fonctions (clé secrète seulement) : finance_definir_mode, finance_confirmer_tarif, finance_corriger_tarif,
+  finance_temps_concernes, finance_calculer (aperçu = émission), finance_emettre_facture, finance_enregistrer_pdf,
+  finance_signaler_echec_pdf, finance_declarer_envoi, finance_enregistrer_reglement, finance_corriger_reglement,
+  supprimer_essais_finance (à appeler AVANT supprimer_essais_rh et supprimer_essais_commercial) ; attribuer_numero
+  accepte désormais `facture` (FAC) et `essai_facture` (ESSAI-FAC). Les 4 fonctions d'identité restent les seules
+  appelables avec un jeton.
+- Droits : factures SANS AUCUN droit pour les jetons (même admin ; règle RLS « lecture admin » en défense) — les écrans
+  Finance lisent avec la clé secrète après exigerAdmin ; projets et temps lisibles seulement par colonnes nommées (tarifs,
+  historique des tarifs, taux et montants facturés illisibles, non filtrables, non triables, `select=*` refusé) ;
+  l'événement « facturation » de l'historique d'un temps ne porte que l'identifiant de la facture ; bucket privé `factures`.
+- La migration remplace temps_controle (RH) à l'identique + UNE exception (nettoyage des factures d'ESSAI),
+  factures_avant_suppression (exception : essais, clé secrète) et attribuer_numero ; elle vérifie AVANT les empreintes des
+  versions en base (et celle de prochain_numero) et refuse de s'appliquer si elles diffèrent.
+- Écrans (src/app/(protege)/finance) : accueil (factures, bandeaux : émission réelle bloquée, limites, facturation
+  électronique provisoire) ; Tarifs et modes des projets ; fiche projet (mode, historique des tarifs, nouveau tarif avec
+  liste des temps concernés et case de confirmation, correction motivée) ; Nouvelle facture (client, mois, projets, TVA —
+  repris du devis du projet s'il existe, sinon proposition affichée jamais appliquée seule — aperçu, aperçu PDF à la volée,
+  émission) ; fiche facture (PDF archivé ou reprise, envoi déclaré, règlement intégral, correction, historique).
+  Gabarit PDF `facture-v1` (src/lib/finance/pdf.ts), jamais modifié une fois des factures émises avec.
+- Tests locaux (24/10/2026) : `rejouer.sh tests_finance.sql` puis `select count(*) filter (where ok), count(*) from
+  fne.resultats` : 118/118 ; `tests_concurrence_finance.sh` 15/15 (double clic, deux clés, tarif pendant une émission et
+  inversement, numérotation sans trou) ; `tests_finance_api.py` 88/88 (après tests_finance.sql, PostgREST local) ;
+  `test_passage_annee_finance.sh` 6/6 (31/12 22 h 30 en Martinique → FAC-2026) ; `tests_pdf_facture.mts` 19/19 (aucun nom
+  d'intervenant, références T-01…) ;
+  autotest : 9 sabotages sur 9 + 3 empreintes de fonctions modifiées : refus, rien appliqué ; navigateur
+  `navigateur_finance.mjs` (après comptes_navigateur.sql + comptes_navigateur_finance.sql) : simulation 54/54, mode réel
+  bloqué 21/21 ; `parcours_finance_en_ligne.mjs` répété sur la pile locale 53/53 (passerelle : création/suppression de
+  comptes et liste/suppression de fichiers ajoutées). Non-régression avec la migration : Commercial 135/135, 17/17, 30/30,
+  numérotation piégée, PDF devis 14/14, RH 155/155 (2 contrôles ajoutés : facture et rattachement hors émission refusés),
+  RH API 28/28, concurrence RH 5/5, temps existants 8/8, compatibilité Utilisateurs 17/17, navigateur Commercial 26/26,
+  limite 2/2, réel 4/4, RH 49/49, taux obligatoire 7/7.
+- Production (après déploiement) : `tests_verrouillage.py` détecte le module (contrôles 4b) ; `parcours_finance_en_ligne.mjs`
+  (facture d'ESSAI uniquement, nettoyage intégré) ; `instantane_complet.py` et `verifier_temps_existants.py` autour du temps 1.
+- Ordre de déploiement prévu : temps 1 = commit de la migration seule (le site en ligne reste compatible : ses lectures de
+  projets et temps nomment leurs colonnes, il ne lit pas les factures) ; temps 2 = écrans, après « Supabase Preview » vert
+  et 20261027100000 dans migrations_appliquees(). Chaque temps sur accord explicite de l'utilisateur.
+
 ## Tests locaux dans le conteneur cloud
 - Base d'essai PostgreSQL 16 : `/var/tmp/pg-essai` (port 5499), démarrage :
   `su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D /var/tmp/pg-essai/data -o '-p 5499 -k /var/tmp/pg-essai -c listen_addresses=' -l /var/tmp/pg-essai/log start"`.
@@ -375,4 +468,7 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 - Le serveur Node doit passer par le proxy : lancer avec
   `NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt npx next start -p 3100`.
 - Navigateur : Playwright avec `executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"`.
+- Serveur Next local : `tests-reels/simulation/serveur_local.sh start [1]|stop` (arrêt par le processus qui écoute sur
+  le port 3200, lu dans /proc ; `ss` n'existe pas ici ; le pid de `setsid` désigne un intermédiaire déjà terminé).
+  Toujours arrêter la pile locale (`pile_locale.sh stop`) avant `rejouer.sh` (sinon la base reste ouverte et rien n'est rejoué).
 - `.env.local` est régénéré depuis les variables d'environnement de la session (jamais commité).

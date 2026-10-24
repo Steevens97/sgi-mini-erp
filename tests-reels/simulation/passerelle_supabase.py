@@ -148,6 +148,19 @@ class Passerelle(BaseHTTPRequestHandler):
             if methode == "GET":
                 lignes = sql("select coalesce(json_agg(json_build_object('id', id, 'email', email, 'app_metadata', raw_app_meta_data)), '[]') from auth.users")
                 return self.repondre(200, {"users": json.loads(lignes)})
+            # Création et suppression de comptes (clé secrète) : utilisées par les parcours « en ligne » rejoués en local.
+            j = self.jeton()
+            if not j or j.get("role") != "service_role":
+                return self.repondre(403, {"msg": "Réservé à la clé secrète"})
+            if methode == "POST" and not uid:
+                donnees = json.loads(self.corps() or b"{}")
+                nouveau = sql("alter table auth.users add column if not exists mot_de_passe text;\n"
+                              "insert into auth.users (id, email, mot_de_passe) values (gen_random_uuid(), :'p0', :'p1') returning id",
+                              donnees.get("email", ""), donnees.get("password", ""))
+                return self.repondre(200, utilisateur(nouveau.splitlines()[0]))
+            if methode == "DELETE" and uid:
+                sql("delete from auth.users where id = :'p0'", uid)
+                return self.repondre(200, {})
         self.repondre(404, {"msg": "non imité : " + chemin})
 
     def stockage(self, methode, chemin):
@@ -155,9 +168,25 @@ class Passerelle(BaseHTTPRequestHandler):
         if not chemin.startswith("/object/"):
             return self.repondre(404, {"message": "non imité"})
         j = self.jeton()
+        if chemin.startswith("/object/list/"):
+            # Liste : rien pour un jeton utilisateur (aucune règle), le contenu pour la clé secrète.
+            if not j or j.get("role") != "service_role":
+                return self.repondre(200, [])
+            bucket = chemin[len("/object/list/"):].split("?")[0]
+            noms = sql("select coalesce(json_agg(name), '[]') from storage.objects where bucket_id = :'p0'", bucket)
+            return self.repondre(200, [{"name": n} for n in json.loads(noms)])
         if not j or j.get("role") != "service_role":
             return self.repondre(403, {"statusCode": "403", "message": "Réservé à la clé secrète (bucket privé)"})
         bucket, _, nom = chemin[len("/object/"):].partition("/")
+        if methode == "DELETE" and not nom:
+            supprimes = []
+            for n in json.loads(self.corps() or b"{}").get("prefixes", []):
+                f = os.path.join(DOSSIER, bucket, n)
+                if os.path.exists(f):
+                    os.remove(f)
+                sql("delete from storage.objects where bucket_id = :'p0' and name = :'p1'", bucket, n)
+                supprimes.append({"name": n})
+            return self.repondre(200, supprimes)
         nom = urllib.parse.unquote(nom.split("?")[0])
         fichier = os.path.join(DOSSIER, bucket, nom)
         if methode == "POST":

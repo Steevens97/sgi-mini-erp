@@ -355,19 +355,34 @@ select rhe.ok('attestation : statut toujours « soumis », aucun valideur, évé
   (select statut = 'soumis' and valide_par is null and historique -> -1 ->> 'action' = 'attestation_interesse' from public.temps where id = rhe.id('adm')));
 update public.profiles set collaborateur_id = null where id = '11111111-1111-1111-1111-111111111111';
 
--- ===================== Facturation (préparation Finance) =====================
+-- ===================== Facturation (règles RH ; avec le module Finance, une facture naît de l'émission) =====================
 insert into public.clients (id, nom) values ('33333333-3333-3333-3333-3333333333f1', 'Client facturation essai');
-insert into public.factures (id, client_id) values ('44444444-4444-4444-4444-4444444444f1', '33333333-3333-3333-3333-3333333333f1');
+select rhe.refus('facture créée hors de l''émission refusée (module Finance)', $q$insert into public.factures (id, client_id) values ('44444444-4444-4444-4444-4444444444f9', '33333333-3333-3333-3333-3333333333f1')$q$, 'naît uniquement de l''émission');
+-- Facture de test posée dans le contexte d'émission (comme le fait finance_emettre_facture).
+do $$ begin
+  perform public.finance_contexte('emission', '{"action":"emission","test":"tests_rh"}', '44444444-4444-4444-4444-4444444444f1');
+  insert into public.factures (id, client_id, numero, statut, instantane_emission, cle_emission)
+  values ('44444444-4444-4444-4444-4444444444f1', '33333333-3333-3333-3333-3333333333f1', 'TEST-RH-0001', 'emise', '{}', gen_random_uuid());
+  perform public.finance_contexte('emission', '{"action":"emission","test":"tests_rh"}', '44444444-4444-4444-4444-4444444444f2');
+  insert into public.factures (id, client_id, numero, statut, instantane_emission, cle_emission)
+  values ('44444444-4444-4444-4444-4444444444f2', '33333333-3333-3333-3333-3333333333f1', 'TEST-RH-0002', 'emise', '{}', gen_random_uuid());
+  perform public.finance_fin_contexte();
+end $$;
 set role service_role;
 select rhe.refus('rattacher une facture à un temps non validé refusé', $q$update public.temps set facture_id = '44444444-4444-4444-4444-4444444444f1' where id = rhe.id('adm')$q$, 'validé');
-select rhe.passe('rattacher une facture à un temps validé (module Finance, clé secrète)', $q$update public.temps set facture_id = '44444444-4444-4444-4444-4444444444f1' where id = rhe.id('m1')$q$);
+select rhe.refus('rattacher une facture hors de l''émission refusé (module Finance)', $q$update public.temps set facture_id = '44444444-4444-4444-4444-4444444444f1' where id = rhe.id('m1')$q$, 'uniquement par l''émission');
+select rhe.passe('rattacher une facture à un temps validé (émission Finance, clé secrète)', $q$do $x$ begin
+  perform public.finance_contexte('emission', '{}', '44444444-4444-4444-4444-4444444444f1');
+  update public.temps set facture_id = '44444444-4444-4444-4444-4444444444f1', taux_facture = 10,
+         montant_facture_ht = round(heures * 10, 2) where id = rhe.id('m1');
+  perform public.finance_fin_contexte();
+end $x$$q$);
 select rhe.refus('temps facturé : modification refusée', $q$update public.temps set commentaire = 'x' where id = rhe.id('m1')$q$, 'facturé');
 select rhe.refus('temps facturé : changer de facture refusé', $q$update public.temps set facture_id = null where id = rhe.id('m1')$q$, 'facturé');
 select rhe.refus('temps facturé : réouverture refusée', $q$select public.rh_changer_statut_temps('11111111-1111-1111-1111-111111111111', array[rhe.id('m1')], 'rouvrir', 'motif')$q$, 'facturé');
 select rhe.refus('temps facturé : suppression refusée', $q$delete from public.temps where id = rhe.id('m1')$q$, 'facturé');
 reset role;
 select rhe.refus('toute facture : suppression refusée, même par le tableau de bord', $q$delete from public.factures where id = '44444444-4444-4444-4444-4444444444f1'$q$, 'ne se supprime jamais');
-insert into public.factures (id, client_id) values ('44444444-4444-4444-4444-4444444444f2', '33333333-3333-3333-3333-3333333333f1');
 select rhe.refus('facture vide (sans temps ni relance) : suppression refusée aussi', $q$delete from public.factures where id = '44444444-4444-4444-4444-4444444444f2'$q$, 'ne se supprime jamais');
 
 -- ===================== Fiches : hiérarchie, départs, suppressions =====================

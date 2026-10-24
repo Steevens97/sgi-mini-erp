@@ -68,6 +68,8 @@ try {
   await formFiche.locator("[name=nom]").fill(`Jetable-${t}`);
   await formFiche.locator("[name=email]").fill(emailAdmin);
   await formFiche.locator("[name=poste]").fill("Test");
+  // Taux horaire obligatoire depuis le module RH (127b824) : valeur de test pour une fiche jetable.
+  await formFiche.locator("[name=taux_horaire]").fill("1");
   await formFiche.locator("[name=rattacher_a_mon_compte]").check();
   await formFiche.locator("button[type=submit]").click();
   await admin.waitForSelector("text=Fiche créée et rattachée à votre compte.");
@@ -82,6 +84,7 @@ try {
   await formFiche.locator("[name=prenom]").fill("Collab");
   await formFiche.locator("[name=nom]").fill(`Jetable2-${t}`);
   await formFiche.locator("[name=email]").fill(emailCollab);
+  await formFiche.locator("[name=taux_horaire]").fill("1");
   await formFiche.locator("button[type=submit]").click();
   await admin.waitForSelector("text=Fiche créée.");
   await admin.reload();
@@ -126,8 +129,9 @@ try {
   await collab.waitForURL(B + "/");
   verifier("nouveau mot de passe accepté → Accueil", collab.url() === B + "/");
   verifier("obligation levée", (await compteAuth(emailCollab)).app_metadata?.doit_changer_mot_de_passe === false);
-  await collab.goto(B + "/rh");
-  const vues = await collab.locator("ul li").allTextContents();
+  // Depuis le module RH (127b824), la liste des fiches est sur /rh/collaborateurs (une ligne par fiche visible).
+  await collab.goto(B + "/rh/collaborateurs");
+  const vues = await collab.locator("tbody tr").allTextContents();
   verifier("le collaborateur ne voit qu'UNE fiche (la sienne)", vues.length === 1 && vues[0].includes(`Jetable2-${t}`), vues.join(" / "));
   const menu = await collab.$$eval("aside nav a", (l) => l.map((x) => x.textContent).join(" | "));
   verifier("menu sans Finance ni Utilisateurs", menu === "Accueil | Commercial | RH | Absences", menu);

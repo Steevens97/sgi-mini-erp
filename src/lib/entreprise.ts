@@ -193,3 +193,80 @@ export function emetteurPourMission(type: TypeMission): Record<string, string> {
 
 // Version du gabarit PDF : chaque version reste dans le code, inchangée, pour les devis émis avec.
 export const GABARIT_DEVIS = "devis-v1";
+
+// ---------- Factures (module Finance) ----------
+// Conditions de paiement imprimées sur chaque facture. À FOURNIR par l'utilisateur (ou son expert-comptable) :
+// aucune valeur n'est inventée. Tant qu'une condition est vide, l'émission réelle est refusée par
+// l'application ET par la base (finance_controle_emetteur).
+export type ConditionsPaiement = {
+  delai_paiement_jours: string; // nombre de jours entre l'émission et l'échéance
+  penalites_retard: string; // texte exact (taux des pénalités de retard)
+  indemnite_recouvrement: string; // texte exact (indemnité forfaitaire pour frais de recouvrement)
+  escompte: string; // texte exact (conditions d'escompte, ou leur absence)
+};
+
+export const CHAMPS_CONDITIONS: { cle: keyof ConditionsPaiement; libelle: string; aide: string }[] = [
+  { cle: "delai_paiement_jours", libelle: "Délai de paiement (jours)", aide: "Nombre entier" },
+  { cle: "penalites_retard", libelle: "Pénalités de retard", aide: "Texte exact à fournir" },
+  { cle: "indemnite_recouvrement", libelle: "Indemnité forfaitaire de recouvrement", aide: "Texte exact à fournir" },
+  { cle: "escompte", libelle: "Escompte pour paiement anticipé", aide: "Texte exact à fournir (y compris son absence)" },
+];
+
+// VALEURS RÉELLES — vides tant que l'utilisateur ne les a pas confirmées.
+export const CONDITIONS_PAIEMENT_SG_INGENIERIE: ConditionsPaiement = {
+  delai_paiement_jours: "",
+  penalites_retard: "",
+  indemnite_recouvrement: "",
+  escompte: "",
+};
+
+// DÉMONSTRATION — réservées aux factures d'essai.
+export const CONDITIONS_DEMO: ConditionsPaiement = {
+  delai_paiement_jours: "30",
+  penalites_retard: "[DÉMO] pénalités de retard",
+  indemnite_recouvrement: "[DÉMO] indemnité de recouvrement",
+  escompte: "[DÉMO] escompte",
+};
+
+const CONDITIONS_SIMULATION: ConditionsPaiement = {
+  delai_paiement_jours: "30",
+  penalites_retard: "SIMULATION",
+  indemnite_recouvrement: "SIMULATION",
+  escompte: "SIMULATION",
+};
+
+// Coordonnées imprimées sur une facture : identité de l'émetteur seulement (ni validité, ni assurance de devis).
+const CHAMPS_EMETTEUR_FACTURE = ["raison_sociale", "forme_juridique", "capital_social", "adresse", "code_postal", "ville",
+  "siret", "immatriculation", "tva_intracom", "telephone", "email"] as const;
+
+function identite(c: CoordonneesEmetteur): Record<string, string> {
+  return Object.fromEntries(CHAMPS_EMETTEUR_FACTURE.map((cle) => [cle, c[cle]]));
+}
+
+export function emetteurFacture(essai: boolean): Record<string, string> {
+  return identite(essai ? COORDONNEES_DEMO : coordonneesEmetteur());
+}
+
+export function conditionsFacture(essai: boolean): ConditionsPaiement {
+  if (essai) return CONDITIONS_DEMO;
+  return enSimulation() ? CONDITIONS_SIMULATION : CONDITIONS_PAIEMENT_SG_INGENIERIE;
+}
+
+// Ce qui empêche d'émettre une facture RÉELLE (vide = émission possible). La base revérifie tout.
+export function blocagesEmissionFacture(): string[] {
+  const c = coordonneesEmetteur();
+  const blocages = champsEmetteurManquants(c)
+    .filter((x) => !x.startsWith("Durée de validité"))
+    .map((x) => `coordonnées : ${x}`);
+  const conditions = conditionsFacture(false);
+  for (const champ of CHAMPS_CONDITIONS) {
+    if (!conditions[champ.cle].trim()) blocages.push(`conditions de paiement : ${champ.libelle}`);
+  }
+  if (conditions.delai_paiement_jours.trim() && !/^[1-9][0-9]{0,2}$/.test(conditions.delai_paiement_jours.trim())) {
+    blocages.push("conditions de paiement : délai (nombre de jours)");
+  }
+  return blocages;
+}
+
+// Version du gabarit PDF des factures : jamais modifiée une fois des factures émises avec.
+export const GABARIT_FACTURE = "facture-v1";

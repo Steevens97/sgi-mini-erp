@@ -30,6 +30,16 @@ CACHEES = {"commercial_prospects": ["email", "telephone", "adresse", "client_id"
            "commercial_devis": ["instantane_emission", "pdf_chemin", "criteres_tva", "envoi_destinataire", "emis_par"]}
 DEPLOYE = False  # renseigné au démarrage d'après migrations_appliquees()
 RH = False       # module RH (migration 20261025100000) : projets et temps sortent des modules fermés
+FINANCE = False  # module Finance (migration 20261027100000) : factures sans aucun droit pour les jetons ;
+                 # projets et temps lisibles seulement par colonnes nommées (tarifs, taux et montants facturés exclus)
+COLONNES = {"projets": "id,nom,client_id,devis_id,statut,created_at,mode_facturation",
+            "temps": "id,collaborateur_id,projet_id,date_saisie,heures,commentaire,statut,facture_id,created_at,saisi_par,"
+                     "saisi_par_nom,saisi_le,valide_par,valide_par_nom,valide_le,motif_derogation,historique"}
+
+
+def sel(t):
+    """Sélection utilisée par les écrans : « * », ou les colonnes nommées quand le module Finance protège des colonnes."""
+    return COLONNES[t] if FINANCE and t in COLONNES else "*"
 
 
 def appel(methode, chemin, jeton=None, corps=None, brut=None, entetes=None, cle=ANON):
@@ -100,7 +110,7 @@ def voit_quelque_chose(j):
     """Somme des lignes visibles sur profiles, collaborateurs et les 11 tables."""
     total = 0
     for t in ["profiles"] + ONZE:
-        total += len(lignes(appel("GET", f"/rest/v1/{t}?select=*", j)[1]))
+        total += len(lignes(appel("GET", f"/rest/v1/{t}?select={sel(t)}", j)[1]))
     total += len(lignes(appel("GET", "/rest/v1/collaborateurs?select=id", j)[1]))
     if DEPLOYE:
         for v in VUES:
@@ -139,13 +149,15 @@ def bucket_devis_ferme(j, qui):
 
 
 def main():
-    global DEPLOYE, RH, FERMEES
+    global DEPLOYE, RH, FINANCE, FERMEES
     s, versions = secret("POST", "/rest/v1/rpc/migrations_appliquees", {})
     DEPLOYE = "20261024100000" in (versions or [])
     RH = "20261025100000" in (versions or [])
+    FINANCE = "20261027100000" in (versions or [])
     if RH:
         FERMEES = [t for t in FERMEES if t not in ("projets", "temps")]
-    print("Module Commercial déployé :", "oui" if DEPLOYE else "non", "| module RH :", "oui" if RH else "non")
+    print("Module Commercial déployé :", "oui" if DEPLOYE else "non", "| module RH :", "oui" if RH else "non",
+          "| module Finance :", "oui" if FINANCE else "non")
     avant = compter_tout()
     print("Lignes des 11 tables (clé secrète) :", avant)
 
@@ -182,7 +194,7 @@ def main():
 
     print("\n== 2. Collaborateur (Léa) : tables fermées" + (" (sauf ses propres temps)" if RH else ""))
     for t in ONZE:
-        s, r = appel("GET", f"/rest/v1/{t}?select=*", j["collab"])
+        s, r = appel("GET", f"/rest/v1/{t}?select={sel(t)}", j["collab"])
         if RH and t == "temps":
             siens = len(lignes(secret("GET", f"/rest/v1/temps?select=id&collaborateur_id=eq.{LEA}")[1]))
             verifier("temps : uniquement les siens", len(lignes(r)) == siens and all(x["collaborateur_id"] == LEA for x in lignes(r)),
@@ -258,7 +270,7 @@ def main():
     else:
         print("\n== 4. Manager : Commercial ouvert, modules encore fermés")
         for t in COMMERCIAL + ["clients"] + (["projets", "temps"] if RH else []):
-            s, r = appel("GET", f"/rest/v1/{t}?select=*", j["manager"])
+            s, r = appel("GET", f"/rest/v1/{t}?select={sel(t)}", j["manager"])
             verifier(f"{t} : lisible en entier", s == 200 and len(lignes(r)) == avant[t], f"{len(lignes(r))}/{avant[t]}")
         for t in FERMEES:
             s, r = appel("GET", f"/rest/v1/{t}?select=*", j["manager"])
@@ -285,9 +297,38 @@ def main():
         verifier("manager : création d'un devis déjà accepté refusée", s in REFUS, f"HTTP {s}")
         bucket_devis_ferme(j["manager"], "manager")
 
-    print("\n== 5. Admin actif : accès complet")
+    if FINANCE:
+        print("\n== 4b. Finance : tarifs, montants facturés et factures illisibles pour TOUS les jetons")
+        interdits = [("projets?select=tarif_vente_ht", "tarif de vente"), ("projets?select=id,tarif_historique", "historique des tarifs"),
+                     ("projets?select=*", "select=* sur projets"), ("projets?select=id&tarif_vente_ht=gt.0", "filtre sur le tarif"),
+                     ("projets?select=id&order=tarif_date_effet", "tri sur la date d'effet"), ("temps?select=taux_facture", "taux facturé"),
+                     ("temps?select=id&montant_facture_ht=gt.0", "filtre sur le montant facturé"), ("temps?select=*", "select=* sur temps"),
+                     ("factures?select=id", "factures"), ("factures?select=*", "select=* sur factures")]
+        for qui in ("collab", "manager", "admin"):
+            for chemin, libelle in interdits:
+                s, r = appel("GET", f"/rest/v1/{chemin}", j[qui])
+                verifier(f"{qui} : {libelle} refusé", s in REFUS, f"HTTP {s}")
+            for f in ("finance_calculer", "finance_emettre_facture", "finance_confirmer_tarif", "supprimer_essais_finance"):
+                s, r = appel("POST", f"/rest/v1/rpc/{f}", j[qui], {})
+                verifier(f"{qui} : fonction {f} refusée", s >= 400, f"HTTP {s}")
+            s, r = appel("POST", "/rest/v1/factures", j[qui], {"client_id": None})
+            verifier(f"{qui} : création de facture refusée", s in REFUS, f"HTTP {s}")
+            s, r = appel("POST", "/storage/v1/object/list/factures", j[qui], {"prefix": ""})
+            verifier(f"{qui} : bucket factures, rien de visible", lignes(r) == [], f"HTTP {s}")
+            s, r = appel("POST", f"/storage/v1/object/factures/jetable-{qui}-{T}.pdf", j[qui], brut=b"%PDF-1.4 essai",
+                         entetes={"Content-Type": "application/pdf"})
+            verifier(f"{qui} : bucket factures, dépôt refusé", s >= 400, f"HTTP {s}")
+        s, r = appel("POST", "/storage/v1/object/list/factures", None, {"prefix": ""})
+        verifier("visiteur : bucket factures, rien de visible", lignes(r) == [], f"HTTP {s}")
+        s, r = secret("GET", "/rest/v1/factures?select=id,numero")
+        verifier("côté serveur (clé secrète, après exigerAdmin) : factures lisibles", s == 200, f"HTTP {s}, {len(lignes(r))} facture(s)")
+
+    print("\n== 5. Admin actif : accès complet" + (" (factures : écrans serveur seulement)" if FINANCE else ""))
     for t in ONZE:
-        s, r = appel("GET", f"/rest/v1/{t}?select=*", j["admin"])
+        s, r = appel("GET", f"/rest/v1/{t}?select={sel(t)}", j["admin"])
+        if FINANCE and t == "factures":
+            verifier("factures : aucun accès par jeton, même admin (lecture serveur avec la clé secrète)", s in REFUS, f"HTTP {s}")
+            continue
         verifier(f"{t} : tout est lisible", len(lignes(r)) == avant[t], f"{len(lignes(r))}/{avant[t]}")
     s, r = appel("POST", "/rest/v1/clients", j["admin"], {"nom": f"Jetable-client-{T}"}, entetes={"Prefer": "return=representation"})
     ok = s == 201 and len(lignes(r)) == 1
