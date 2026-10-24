@@ -389,19 +389,19 @@ reset role;
 select rhe.refus('manager sorti : ne reçoit pas de nouvelle équipe', $q$update public.collaborateurs set manager_id = '22222222-2222-2222-2222-222222222223' where id = '22222222-2222-2222-2222-222222222224'$q$, 'quitté');
 update public.collaborateurs set date_sortie = null where id = '22222222-2222-2222-2222-222222222223';
 -- Suppressions (même avec les droits les plus élevés : tableau de bord).
-select rhe.refus('fiche avec temps : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-222222222221'$q$, 'des temps');
+select rhe.refus('fiche avec temps : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-222222222221'$q$, 'Suppression refusée : la fiche Lea Moreau porte des temps, un compte rattaché. Renseignez plutôt sa date de sortie.');
 insert into public.collaborateurs (id, nom, taux_horaire) values ('22222222-2222-2222-2222-2222222222c1', 'Conge', 0),
   ('22222222-2222-2222-2222-2222222222c2', 'Frais', 0), ('22222222-2222-2222-2222-2222222222c3', 'Valideur', 0),
   ('22222222-2222-2222-2222-2222222222c4', 'Libre', 0), ('22222222-2222-2222-2222-2222222222c5', 'Chef', 0);
 insert into public.conges (collaborateur_id, date_debut, date_fin) values ('22222222-2222-2222-2222-2222222222c1', '2026-11-02', '2026-11-03');
 insert into public.notes_de_frais (collaborateur_id, montant) values ('22222222-2222-2222-2222-2222222222c2', 12.5);
 insert into public.conges (collaborateur_id, date_debut, date_fin, statut, valide_par) values ('22222222-2222-2222-2222-2222222222c4', '2026-11-02', '2026-11-03', 'validee', '22222222-2222-2222-2222-2222222222c3');
-select rhe.refus('fiche avec congés : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c1'$q$, 'des congés');
-select rhe.refus('fiche avec notes de frais : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c2'$q$, 'notes de frais');
-select rhe.refus('fiche ayant validé un congé : suppression refusée (trace du valideur)', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c3'$q$, 'validés');
-select rhe.refus('fiche rattachée à un compte : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-222222222224'$q$, 'compte rattaché');
+select rhe.refus('fiche avec congés : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c1'$q$, 'la fiche  Conge porte des congés.');
+select rhe.refus('fiche avec notes de frais : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c2'$q$, 'la fiche  Frais porte des notes de frais.');
+select rhe.refus('fiche ayant validé un congé : suppression refusée (trace du valideur)', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c3'$q$, 'la fiche  Valideur porte des congés qu''elle a validés.');
+select rhe.refus('fiche rattachée à un compte : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-222222222224'$q$, 'porte un compte rattaché.');
 update public.collaborateurs set manager_id = '22222222-2222-2222-2222-2222222222c5' where id = '22222222-2222-2222-2222-2222222222c2';
-select rhe.refus('fiche qui manage quelqu''un : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c5'$q$, 'équipe');
+select rhe.refus('fiche qui manage quelqu''un : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c5'$q$, 'la fiche  Chef porte une équipe (manager).');
 delete from public.conges where collaborateur_id = '22222222-2222-2222-2222-2222222222c4';
 select rhe.passe('contrôle positif : fiche sans aucune pièce ni lien supprimable', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c4'$q$);
 select rhe.ok('congés, notes de frais et validations toujours présents', (select count(*) = 1 from public.conges) and (select count(*) = 1 from public.notes_de_frais));

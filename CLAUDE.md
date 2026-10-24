@@ -278,19 +278,31 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   et un collaborateur, et se reconnecte en collaborateur.
 
 - Module Commercial : DÉPLOYÉ (23/10/2026), émission réelle bloquée (coordonnées et assurances à fournir) — voir la section dédiée.
-- Module RH : migration 20261025100000 APPLIQUÉE (temps 1, 24/10/2026) ; écrans préparés sur la branche
-  `preparation-rh-main`, NON PUBLIÉS (temps 2 en attente d'accord) — voir la section « Module RH ». Fiche réelle de l'utilisateur : attend
-  ses informations et son taux confirmé.
+- Module RH : DÉPLOYÉ (temps 1 et 2, 24/10/2026) ; correctif du message de suppression de fiche PRÉPARÉ
+  (migration 20261026100000, branche `correctif-rh-suppression`), NON DÉPLOYÉ — voir la section « Module RH ».
+  Fiche réelle de l'utilisateur : attend ses informations et son taux confirmé. Finance : pas commencé (accord requis).
 
-## Module RH (migration 20261025100000) — MIGRATION APPLIQUÉE (temps 1), ÉCRANS NON PUBLIÉS
+## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
 - TEMPS 1 FAIT (accord de l'utilisateur, 24/10/2026) : commit 312b7e1 sur main (remplace 402a4ef ; migration
   seule, date par défaut en Martinique incluse ; code du site inchangé). Supabase Preview vert ; 8 migrations ;
   colonnes, défaut, vue et paramètres présents ; `verifier_temps_existants.py` 10/10 (anciennes colonnes
   identiques, nouveaux champs vides + 1 événement) ; `tests_verrouillage.py` (mode RH) 204/204 ;
   `ecran_utilisateurs.mjs` en ligne 45/45 ; `instantane_complet.py` identique ; 0 résidu ; site : ancien écran
   RH, /rh/temps introuvable (écrans non publiés), Commercial en place.
-- TEMPS 2 (écrans) : commit local sur la branche `deploiement-rh` (contenu = preparation-rh-main), à pousser
-  en avance rapide sur main APRÈS accord explicite de l'utilisateur.
+- TEMPS 2 FAIT (accord de l'utilisateur, 24/10/2026) : commit 127b824 sur main (écrans ; code = version testée,
+  migration 20261025100000 inchangée, empreinte vérifiée). Vercel et Supabase Preview verts. Parcours en ligne
+  `tests-reels/parcours_rh_en_ligne.mjs <url>` (comptes et fiches jetables, temps sur projet [ESSAI] issu d'un devis
+  d'essai) : 49/49 ; Commercial en ligne 57/57 ; tests_verrouillage 204/204 ; instantane_complet identique ;
+  verifier_temps_existants 10/10 (anciennes colonnes préservées ; nouveaux champs = état après migration) ; 0 résidu.
+  Nettoyage : supprimer_essais_rh → comptes → fiches → projet manuel → supprimer_essais_commercial → PDF.
+- DÉFAUT trouvé au temps 2 : supprimer une fiche qui porte des pièces est bien REFUSÉ, mais le message est
+  technique (« malformed array literal ») : `tableau || 'texte'` dans collaborateurs_avant_suppression().
+  Aucun écran ne supprime de fiche (seuls le tableau de bord et la clé secrète sont concernés). Mes tests
+  passaient à tort (recherche de « des temps » dans le message) : tests_rh.sql et le parcours en ligne vérifient
+  désormais le message EXACT. Correctif PRÉPARÉ, NON DÉPLOYÉ : migration 20261026100000 (array_append, autotest des
+  messages exacts ; 4 sabotages sur 4 arrêtés, rien appliqué) ; tests_rh 153/153 ; non-régression Commercial
+  135/135, 17/17, 30/30, numérotation piégée, RH API 28/28, concurrence RH, temps existants, compatibilité 17/17.
+  Déploiement = commit de la migration seule sur main, APRÈS accord de l'utilisateur (aucun code du site modifié).
 - Décisions de l'utilisateur (23/10/2026, ne plus les redemander) : D1 projets sans devis créés par l'admin,
   projets `en_cours` visibles de tous (nom du client seulement) ; D2 chacun saisit ses temps, l'admin peut
   saisir pour autrui (auteur ≠ collaborateur, tracés), réouverture d'un temps validé = admin + motif, trace de
