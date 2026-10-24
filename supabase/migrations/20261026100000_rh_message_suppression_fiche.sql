@@ -45,8 +45,6 @@ begin
   return old;
 end
 $$;
--- Fonction de déclencheur : jamais appelable directement.
-revoke all on function public.collaborateurs_avant_suppression() from public, anon, authenticated;
 
 -- 3. Contrôles finaux et autotest (annulé) ----------------------------------------------------------------------
 do $$
