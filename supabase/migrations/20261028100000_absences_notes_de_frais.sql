@@ -12,6 +12,9 @@
 --     correction motivée avec historique ;
 --   - historiques écrits par la base seulement, en ajout seul ; aucune relance automatique.
 -- Soldes existants : congés payés INCHANGÉS ; RTT initialisés à 0 avec la mention « droits non renseignés ».
+-- Nouvelles fiches (précision de l'utilisateur du 24/10/2026) : AUCUNE attribution automatique (l'ancien défaut de 25 jours
+-- est remplacé par 0) ; congés payés et RTT « à renseigner » jusqu'à la confirmation explicite de l'administrateur, tracée
+-- même lorsque la valeur confirmée est 0.
 -- Confidentialité : soldes lisibles seulement via la vue absences_soldes (soi, équipe directe du manager, admin) ;
 -- la lecture de solde_conges par tous les managers (ouverte jusqu'ici) est fermée.
 -- Compatible avec le site en ligne : aucune colonne existante n'est supprimée ; le site actuel ne lit ni les soldes
@@ -53,6 +56,8 @@ $$;
 alter table public.collaborateurs
   add column if not exists solde_rtt numeric(6, 2) not null default 0,
   add column if not exists historique_soldes jsonb not null default '[]'::jsonb;
+-- Plus aucune attribution automatique de 25 jours à la création d'une fiche (valeurs existantes inchangées).
+alter table public.collaborateurs alter column solde_conges set default 0;
 
 alter table public.conges
   add column if not exists debut_apres_midi boolean not null default false,  -- l'absence commence l'après-midi
@@ -95,10 +100,10 @@ alter table public.notes_de_frais
 --    déclencheur qui interdit toute écriture directe de l'historique des soldes.
 update public.collaborateurs
    set historique_soldes = jsonb_build_array(
-         jsonb_build_object('type', 'conges_payes', 'action', 'initial', 'le', now(), 'avant', null, 'apres', solde_conges,
+         jsonb_build_object('type', 'conges_payes', 'action', 'repris', 'le', now(), 'avant', null, 'apres', solde_conges,
            'auteur', null, 'auteur_nom', null,
            'motif', 'Solde existant avant le module Absences (migration 20261028100000), repris sans modification.'),
-         jsonb_build_object('type', 'rtt', 'action', 'initial', 'le', now(), 'avant', null, 'apres', 0,
+         jsonb_build_object('type', 'rtt', 'action', 'a_renseigner', 'le', now(), 'avant', null, 'apres', 0,
            'auteur', null, 'auteur_nom', null,
            'motif', 'Droits RTT non renseignés : aucune acquisition automatique ; à renseigner par un ajustement motivé.'))
  where historique_soldes = '[]'::jsonb;
@@ -224,6 +229,29 @@ as $$
   select coalesce(lower(p_email), '') like '%@exemple.invalid';
 $$;
 
+-- Solde « renseigné » : repris d'avant le module (congés payés existants), ou confirmé/ajusté par l'administrateur.
+create or replace function public.abs_solde_renseigne(p_historique jsonb, p_type text)
+returns boolean
+language sql
+immutable
+as $$
+  select exists (select 1 from jsonb_array_elements(p_historique) e
+                  where e ->> 'type' = p_type and e ->> 'action' in ('repris', 'ajustement', 'confirmation'));
+$$;
+
+-- Seule lecture du stockage par la base : objets du bucket « justificatifs » (tous, ou un chemin).
+create or replace function public.abs_objets_stockes(p_chemin text)
+returns table (nom text, cree timestamptz, taille bigint, type_mime text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select o.name, o.created_at, (o.metadata ->> 'size')::bigint, o.metadata ->> 'mimetype'
+    from storage.objects o
+   where o.bucket_id = 'justificatifs' and (p_chemin is null or o.name = p_chemin);
+$$;
+
 -- Justificatif : contrôles faits par la BASE (le contenu du fichier, lui, est contrôlé par le serveur :
 -- signature du format et SHA-256 ; la base ne lit pas les octets du fichier).
 create or replace function public.abs_controler_justificatif(p_collaborateur uuid, p_note uuid, p_chemin text,
@@ -236,7 +264,8 @@ set search_path = public
 as $$
 declare
   v_cree timestamptz;
-  v_meta jsonb;
+  v_taille bigint;
+  v_type text;
 begin
   if p_chemin is null then
     raise exception 'Justificatif obligatoire : déposez un fichier PDF, JPEG ou PNG.';
@@ -257,15 +286,14 @@ begin
   if p_empreinte is null or p_empreinte !~ '^[0-9a-f]{64}$' then
     raise exception 'Justificatif : empreinte SHA-256 absente ou mal formée.';
   end if;
-  select o.created_at, o.metadata into v_cree, v_meta
-    from storage.objects o where o.bucket_id = 'justificatifs' and o.name = p_chemin;
+  select cree, taille, type_mime into v_cree, v_taille, v_type from public.abs_objets_stockes(p_chemin);
   if v_cree is null then
     raise exception 'Justificatif absent du stockage : déposez le fichier à nouveau.';
   end if;
-  if (v_meta ->> 'size')::bigint is distinct from p_taille then
+  if v_taille is distinct from p_taille then
     raise exception 'Justificatif : la taille stockée diffère de la taille contrôlée par le serveur.';
   end if;
-  if v_meta ->> 'mimetype' is distinct from p_type then
+  if v_type is distinct from p_type then
     raise exception 'Justificatif : le type stocké diffère du type contrôlé par le serveur.';
   end if;
   -- Un dépôt se rattache dans les 30 minutes ; le nettoyage ne vise que les dépôts de plus d'une heure : un fichier
@@ -340,16 +368,17 @@ declare
   v_fin date;
 begin
   if tg_op = 'INSERT' then
-    if new.solde_rtt <> 0 then
-      raise exception 'Une nouvelle fiche démarre avec un solde RTT à 0 (droits non renseignés) ; renseignez-le ensuite par un ajustement motivé.';
+    if new.solde_conges <> 0 or new.solde_rtt <> 0 then
+      raise exception 'Une nouvelle fiche démarre avec des soldes à 0, « à renseigner » : aucune attribution automatique ; l''administrateur confirme ensuite chaque solde (même 0), avec un motif.';
     end if;
     if new.historique_soldes is distinct from '[]'::jsonb then
       raise exception 'Historique des soldes : alimenté par la base seulement.';
     end if;
     new.historique_soldes := jsonb_build_array(
-      jsonb_build_object('type', 'conges_payes', 'action', 'initial', 'le', now(), 'avant', null, 'apres', new.solde_conges,
-        'auteur', null, 'auteur_nom', null, 'motif', 'Solde à la création de la fiche.'),
-      jsonb_build_object('type', 'rtt', 'action', 'initial', 'le', now(), 'avant', null, 'apres', 0,
+      jsonb_build_object('type', 'conges_payes', 'action', 'a_renseigner', 'le', now(), 'avant', null, 'apres', 0,
+        'auteur', null, 'auteur_nom', null,
+        'motif', 'Solde à renseigner : aucune attribution automatique ; confirmation explicite de l''administrateur requise.'),
+      jsonb_build_object('type', 'rtt', 'action', 'a_renseigner', 'le', now(), 'avant', null, 'apres', 0,
         'auteur', null, 'auteur_nom', null,
         'motif', 'Droits RTT non renseignés : aucune acquisition automatique ; à renseigner par un ajustement motivé.'));
     return new;
@@ -408,6 +437,7 @@ declare
   v_cp numeric;
   v_rtt numeric;
   v_rtt_renseigne boolean;
+  v_cp_renseigne boolean;
   v_max numeric;
   v_conflit record;
   v_preleve numeric;
@@ -546,13 +576,14 @@ begin
     -- Verrou de la fiche (après celui de la demande, posé par la fonction de service) : deux validations de
     -- demandes différentes ne prélèvent jamais au-delà du solde.
     select solde_conges, solde_rtt,
-           exists (select 1 from jsonb_array_elements(historique_soldes) e where e ->> 'type' = 'rtt' and e ->> 'action' = 'ajustement')
-      into v_cp, v_rtt, v_rtt_renseigne
+           public.abs_solde_renseigne(historique_soldes, 'rtt'), public.abs_solde_renseigne(historique_soldes, 'conges_payes')
+      into v_cp, v_rtt, v_rtt_renseigne, v_cp_renseigne
       from public.collaborateurs where id = old.collaborateur_id for update;
     v_preleve := case old.type when 'sans_solde' then 0 else old.nb_jours end;
     if old.type = 'conges_payes' and v_cp < old.nb_jours then
-      raise exception 'Solde de congés payés insuffisant : % jour(s) disponible(s), % demandé(s). Validation refusée.',
-        replace(trim_scale(v_cp)::text, '.', ','), replace(trim_scale(old.nb_jours)::text, '.', ',');
+      raise exception 'Solde de congés payés insuffisant : % jour(s) disponible(s), % demandé(s)%. Validation refusée.',
+        replace(trim_scale(v_cp)::text, '.', ','), replace(trim_scale(old.nb_jours)::text, '.', ','),
+        case when v_cp_renseigne then '' else ' (solde à renseigner)' end;
     end if;
     if old.type = 'rtt' and v_rtt < old.nb_jours then
       raise exception 'Solde RTT insuffisant : % jour(s) disponible(s), % demandé(s)%. Validation refusée.',
@@ -689,8 +720,10 @@ begin
     if (new.rembourse_le, new.reference_remboursement) is distinct from (old.rembourse_le, old.reference_remboursement) then
       raise exception 'Le remboursement ne se déclare pas avec une modification de contenu.';
     end if;
-    if a.o_role <> 'admin' and a.o_collaborateur is distinct from old.collaborateur_id then
-      raise exception 'Vous ne pouvez modifier que vos propres notes de frais.';
+    -- Personne d'autre (administrateur compris) ne modifie le contenu d'une note : le responsable la valide ou la
+    -- refuse avec un motif, et la personne concernée dépose une nouvelle note si nécessaire.
+    if a.o_collaborateur is distinct from old.collaborateur_id then
+      raise exception 'Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.';
     end if;
     perform public.abs_controler_contenu_note(new.collaborateur_id, new.date_depense, new.categorie, new.categorie_precision, new.objet);
     if v_justif then
@@ -915,7 +948,8 @@ begin
       replace(trim_scale(v_actuel)::text, '.', ','), coalesce(replace(trim_scale(p_ancien)::text, '.', ','), 'non transmis');
   end if;
   select coalesce(nullif(nom, ''), email) into v_nom from public.profiles where id = p_auteur;
-  perform set_config('sgi.abs_evenement', jsonb_build_object('type', p_type, 'action', 'ajustement', 'auteur', p_auteur,
+  perform set_config('sgi.abs_evenement', jsonb_build_object('type', p_type,
+    'action', case when p_nouveau = v_actuel then 'confirmation' else 'ajustement' end, 'auteur', p_auteur,
     'auteur_nom', v_nom, 'motif', btrim(p_motif))::text, true);
   if p_type = 'rtt' then
     update public.collaborateurs set solde_rtt = p_nouveau where id = p_collaborateur;
@@ -1136,10 +1170,10 @@ language sql
 stable
 set search_path = public
 as $$
-  select o.name from storage.objects o
-   where o.bucket_id = 'justificatifs' and o.created_at < now() - interval '1 hour'
-     and not public.abs_justificatif_rattache(o.name)
-   order by o.name;
+  select o.nom from public.abs_objets_stockes(null) o
+   where o.cree < now() - interval '1 hour'
+     and not public.abs_justificatif_rattache(o.nom)
+   order by o.nom;
 $$;
 
 -- 6j. Nettoyage des essais (clé secrète) : congés et notes des fiches d'essai (@exemple.invalid). Renvoie les
@@ -1183,7 +1217,7 @@ declare
 begin
   foreach v_fonction in array array[
     'abs_contexte(uuid, text, text)', 'abs_fin_contexte()', 'abs_auteur_courant()', 'abs_demi_debut(date, boolean)',
-    'abs_demi_fin(date, boolean)', 'abs_fiche_essai(text)',
+    'abs_demi_fin(date, boolean)', 'abs_fiche_essai(text)', 'abs_solde_renseigne(jsonb, text)', 'abs_objets_stockes(text)',
     'abs_controler_justificatif(uuid, uuid, text, text, bigint, text)', 'abs_controler_contenu_note(uuid, date, text, text, text)',
     'abs_demander_conge(uuid, uuid, text, date, date, boolean, boolean, numeric, text, text)',
     'abs_decider_conge(uuid, uuid, text, text)', 'abs_ajuster_solde(uuid, uuid, text, numeric, numeric, text)',
@@ -1249,8 +1283,11 @@ $$;
 drop view if exists public.absences_soldes;
 create view public.absences_soldes with (security_barrier = true) as
   select c.id, c.nom, c.prenom, c.manager_id, c.date_sortie, c.solde_conges, c.solde_rtt, c.historique_soldes,
+         -- Même règle que abs_solde_renseigne, écrite ici : un jeton ne peut exécuter aucune fonction hors des 4 d'identité.
          exists (select 1 from jsonb_array_elements(c.historique_soldes) e
-                  where e ->> 'type' = 'rtt' and e ->> 'action' = 'ajustement') as droits_rtt_renseignes
+                  where e ->> 'type' = 'conges_payes' and e ->> 'action' in ('repris', 'ajustement', 'confirmation')) as conges_payes_renseignes,
+         exists (select 1 from jsonb_array_elements(c.historique_soldes) e
+                  where e ->> 'type' = 'rtt' and e ->> 'action' in ('repris', 'ajustement', 'confirmation')) as droits_rtt_renseignes
     from public.collaborateurs c
    where c.id = (select public.mon_collaborateur_id())
       or (select public.est_admin())
@@ -1294,7 +1331,7 @@ declare
   v_note uuid;
   v_chemin text;
   v_chemin2 text;
-  v_stockage boolean := true;
+  v_definition text;
   v_avant text;
   v_apres text;
 begin
@@ -1369,16 +1406,37 @@ begin
   if v_nb <> 5 then
     raise exception 'Absences : % déclencheurs sur 5 posés', v_nb;
   end if;
-  -- Soldes existants : congés payés repris tels quels, RTT à 0 « non renseignés », pour chaque fiche.
+  -- Soldes existants : congés payés repris tels quels (renseignés), RTT à 0 « à renseigner », pour chaque fiche.
   select count(*) into v_nb from public.collaborateurs
-   where solde_rtt <> 0 or jsonb_array_length(historique_soldes) < 2
-      or (historique_soldes -> 0 ->> 'apres')::numeric <> solde_conges
-      or historique_soldes -> 1 ->> 'type' <> 'rtt';
+   where solde_rtt <> 0 or jsonb_array_length(historique_soldes) <> 2
+      or historique_soldes -> 0 ->> 'action' <> 'repris' or (historique_soldes -> 0 ->> 'apres')::numeric <> solde_conges
+      or historique_soldes -> 1 ->> 'action' <> 'a_renseigner' or historique_soldes -> 1 ->> 'type' <> 'rtt';
   if v_nb > 0 then
     raise exception 'Absences : % fiche(s) avec des soldes initiaux incohérents', v_nb;
   end if;
+  select column_default into v_liste from information_schema.columns
+   where table_schema = 'public' and table_name = 'collaborateurs' and column_name = 'solde_conges';
+  if v_liste is distinct from '0' then
+    raise exception 'Absences : solde de congés par défaut d''une nouvelle fiche : % (0 attendu, aucune attribution automatique)', v_liste;
+  end if;
+  -- La base ne lit le stockage QUE par abs_objets_stockes (l'autotest peut donc la remplacer le temps de la transaction).
+  select string_agg(p.proname, ', ') into v_liste
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and (p.proname like 'abs\_%' or p.proname in ('supprimer_essais_absences', 'conges_controle',
+          'notes_de_frais_controle', 'collaborateurs_absences_controle'))
+     and p.prosrc ilike '%storage.objects%' and p.proname <> 'abs_objets_stockes';
+  if v_liste is not null then
+    raise exception 'Absences : lecture directe du stockage hors abs_objets_stockes : %', v_liste;
+  end if;
+  select md5(p.prosrc) into v_definition
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'abs_objets_stockes';
 
   -- Autotest complet, annulé à la fin (fiches d'essai uniquement). Empreinte avant/après des tables touchées.
+  -- Le stockage n'est jamais écrit : le temps de l'autotest seulement, abs_objets_stockes lit une table temporaire de
+  -- dépôts simulés ; l'annulation rétablit la vraie définition (contrôlée ensuite). TOUTES les règles de la base sur les
+  -- justificatifs sont ainsi vérifiées ici ; le comportement du stockage lui-même (lien signé, non-écrasement, limites)
+  -- est vérifié APRÈS application par tests-reels/essais_stockage_absences.mjs (à réussir avant le temps 2).
   select md5(coalesce((select string_agg(c::text, '|' order by c.id) from public.collaborateurs c), '')
           || coalesce((select string_agg(p::text, '|' order by p.id) from public.profiles p), '')
           || coalesce((select string_agg(c::text, '|' order by c.id) from public.conges c), '')
@@ -1391,15 +1449,27 @@ begin
     raise exception 'Absences : aucun compte admin, autotest impossible';
   end if;
   begin
-    -- Fiches d'essai : M (manager de A) et A. Solde initial des congés payés : valeur de création (25 par défaut).
+    create temp table abs_autotest_objets (nom text primary key, cree timestamptz not null, taille bigint, type_mime text);
+    create or replace function public.abs_objets_stockes(p_chemin text)
+    returns table (nom text, cree timestamptz, taille bigint, type_mime text)
+    language sql stable security definer set search_path = public
+    as $f$ select o.nom, o.cree, o.taille, o.type_mime from pg_temp.abs_autotest_objets o where p_chemin is null or o.nom = p_chemin $f$;
+
+    -- Nouvelles fiches : 0 et « à renseigner » ; aucune attribution automatique.
     insert into public.collaborateurs (nom, prenom, email) values ('Autotest-Absences', 'M', 'autotest-m@exemple.invalid')
       returning id into v_m;
     insert into public.collaborateurs (nom, prenom, email, manager_id) values ('Autotest-Absences', 'A', 'autotest-a@exemple.invalid', v_m)
       returning id into v_a;
-    if (select solde_rtt <> 0 or jsonb_array_length(historique_soldes) <> 2 or historique_soldes -> 1 ->> 'action' <> 'initial'
+    if (select solde_conges <> 0 or solde_rtt <> 0 or jsonb_array_length(historique_soldes) <> 2
+               or historique_soldes -> 0 ->> 'action' <> 'a_renseigner' or historique_soldes -> 1 ->> 'action' <> 'a_renseigner'
+               or public.abs_solde_renseigne(historique_soldes, 'conges_payes') or public.abs_solde_renseigne(historique_soldes, 'rtt')
           from public.collaborateurs where id = v_a) then
-      raise exception 'AUTOTEST: soldes initiaux d''une nouvelle fiche incorrects';
+      raise exception 'AUTOTEST: soldes initiaux d''une nouvelle fiche incorrects (0 et à renseigner attendus)';
     end if;
+    begin
+      insert into public.collaborateurs (nom, email, solde_conges) values ('Autotest-Absences', 'autotest-x@exemple.invalid', 25);
+      raise exception 'AUTOTEST: fiche créée avec 25 jours attribués automatiquement';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
     begin
       insert into public.collaborateurs (nom, email, solde_rtt) values ('Autotest-Absences', 'autotest-x@exemple.invalid', 3);
       raise exception 'AUTOTEST: fiche créée avec un solde RTT';
@@ -1417,27 +1487,44 @@ begin
       raise exception 'AUTOTEST: congé créé hors application';
     exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
 
-    -- Demi-journées : un jour commencé l'après-midi et fini à midi, 0 jour, pas de 0,3, dépassement : refusés.
+    -- Solde à renseigner : validation refusée ; confirmation explicite à 0 tracée ; puis ajustement à 25.
+    v_c1 := public.abs_demander_conge(v_admin, v_a, 'conges_payes', v_j + 7, v_j + 8, false, true, 1.5, null, null);
     begin
-      perform public.abs_demander_conge(v_admin, v_a, 'conges_payes', v_j + 7, v_j + 7, true, true, 0.5, null, null);
+      perform public.abs_decider_conge(v_admin, v_c1, 'valider', null);
+      raise exception 'AUTOTEST: congé validé sur un solde à renseigner';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if;
+      if sqlerrm not like 'Solde de congés payés insuffisant%(solde à renseigner)%' then
+        raise exception 'AUTOTEST: message inattendu (solde à renseigner) : %', sqlerrm;
+      end if;
+    end;
+    perform public.abs_ajuster_solde(v_admin, v_a, 'conges_payes', 0, 0, 'Solde confirmé à 0 (autotest)');
+    if (select historique_soldes -> -1 ->> 'action' <> 'confirmation' or (historique_soldes -> -1 ->> 'apres')::numeric <> 0
+               or historique_soldes -> -1 ->> 'motif' <> 'Solde confirmé à 0 (autotest)'
+               or not public.abs_solde_renseigne(historique_soldes, 'conges_payes')
+          from public.collaborateurs where id = v_a) then
+      raise exception 'AUTOTEST: confirmation d''un solde à 0 non tracée';
+    end if;
+    perform public.abs_ajuster_solde(v_admin, v_a, 'conges_payes', 0, 25, 'Solde transmis (autotest)');
+
+    -- Demi-journées : un jour commencé l'après-midi et fini à midi, pas de 0,3, dépassement, rétroactif sans motif.
+    begin
+      perform public.abs_demander_conge(v_admin, v_a, 'conges_payes', v_j + 20, v_j + 20, true, true, 0.5, null, null);
       raise exception 'AUTOTEST: après-midi → midi le même jour accepté';
     exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if;
       if sqlerrm not like 'Demi-journées incohérentes%' then raise exception 'AUTOTEST: message inattendu (demi-journées) : %', sqlerrm; end if;
     end;
     begin
-      perform public.abs_demander_conge(v_admin, v_a, 'conges_payes', v_j + 7, v_j + 8, false, true, 0.3, null, null);
+      perform public.abs_demander_conge(v_admin, v_a, 'conges_payes', v_j + 20, v_j + 21, false, true, 0.3, null, null);
       raise exception 'AUTOTEST: 0,3 jour accepté';
     exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
     begin
-      perform public.abs_demander_conge(v_admin, v_a, 'conges_payes', v_j + 7, v_j + 8, false, true, 2, null, null);
+      perform public.abs_demander_conge(v_admin, v_a, 'conges_payes', v_j + 20, v_j + 21, false, true, 2, null, null);
       raise exception 'AUTOTEST: nombre de jours supérieur à la période accepté';
     exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
     begin
       perform public.abs_demander_conge(v_admin, v_a, 'conges_payes', v_j - 3, v_j - 3, false, false, 1, null, '');
       raise exception 'AUTOTEST: demande rétroactive sans motif acceptée';
     exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
-    -- J+7 matin → J+8 midi : 1,5 jour au plus.
-    v_c1 := public.abs_demander_conge(v_admin, v_a, 'conges_payes', v_j + 7, v_j + 8, false, true, 1.5, null, null);
     -- Chevauchement à la demi-journée : J+8 matin refusé, J+8 après-midi accepté.
     begin
       perform public.abs_demander_conge(v_admin, v_a, 'rtt', v_j + 8, v_j + 8, false, true, 0.5, null, null);
@@ -1516,17 +1603,9 @@ begin
     exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
     update public.profiles set collaborateur_id = v_admin_fiche where id = v_admin;
 
-    -- Notes de frais : dépôt simulé dans le stockage (annulé avec l'autotest). Si le stockage de Supabase refuse une
-    -- écriture directe (droits ou contrôles propres au stockage), seul le refus d'un justificatif absent est vérifié ici ;
-    -- le reste est vérifié par les tests locaux et le parcours en ligne.
+    -- Notes de frais et justificatifs (dépôts simulés dans la table temporaire, jamais dans le stockage).
     v_chemin := v_a || '/' || gen_random_uuid() || '.pdf';
-    begin
-      insert into storage.objects (bucket_id, name, metadata)
-      values ('justificatifs', v_chemin, jsonb_build_object('size', 1234, 'mimetype', 'application/pdf'));
-    exception when others then
-      v_stockage := false;
-      raise notice 'Absences : autotest des notes de frais limité (dépôt simulé refusé par le stockage : %)', sqlerrm;
-    end;
+    insert into pg_temp.abs_autotest_objets values (v_chemin, now(), 1234, 'application/pdf');
     begin
       perform public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'repas', null, 'Déjeuner', v_a || '/' || gen_random_uuid() || '.pdf',
         'application/pdf', 1234, repeat('a', 64));
@@ -1536,89 +1615,121 @@ begin
       perform public.abs_creer_note(v_admin, v_a, v_j - 1, 12.555, 'repas', null, 'Déjeuner', v_chemin, 'application/pdf', 1234, repeat('a', 64));
       raise exception 'AUTOTEST: montant à 3 décimales accepté';
     exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
-    if v_stockage then
-      begin
-        perform public.abs_creer_note(v_admin, v_m, v_j - 1, 12.5, 'repas', null, 'Déjeuner', v_chemin, 'application/pdf', 1234, repeat('a', 64));
-        raise exception 'AUTOTEST: justificatif d''un autre dossier accepté';
-      exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
-      begin
-        perform public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'repas', null, 'Déjeuner', v_chemin, 'application/pdf', 999, repeat('a', 64));
-        raise exception 'AUTOTEST: taille différente du stockage acceptée';
-      exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
-      begin
-        perform public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'autre', ' ', 'Déjeuner', v_chemin, 'application/pdf', 1234, repeat('a', 64));
-        raise exception 'AUTOTEST: catégorie « autre » sans précision acceptée';
-      exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
-      v_res := public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'repas', null, '  Déjeuner client  ', v_chemin, 'application/pdf', 1234, repeat('a', 64));
-      v_res2 := public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'repas', null, '  Déjeuner client  ', v_chemin, 'application/pdf', 1234, repeat('a', 64));
-      v_note := (v_res ->> 'id')::uuid;
-      if v_res2 ->> 'id' <> v_res ->> 'id' or (v_res2 ->> 'deja_creee')::boolean is not true
-         or (select objet <> 'Déjeuner client' or not essai from public.notes_de_frais where id = v_note) then
-        raise exception 'AUTOTEST: création de note ou reprise incorrecte (% / %)', v_res, v_res2;
-      end if;
-      -- Modification tant que « soumise » (nouveau justificatif : l'ancien reste rattaché par l'historique).
-      v_chemin2 := v_a || '/' || gen_random_uuid() || '.png';
-      insert into storage.objects (bucket_id, name, metadata)
-      values ('justificatifs', v_chemin2, jsonb_build_object('size', 99, 'mimetype', 'image/png'));
+    begin
+      perform public.abs_creer_note(v_admin, v_m, v_j - 1, 12.5, 'repas', null, 'Déjeuner', v_chemin, 'application/pdf', 1234, repeat('a', 64));
+      raise exception 'AUTOTEST: justificatif d''un autre dossier accepté';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    begin
+      perform public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'repas', null, 'Déjeuner', v_chemin, 'application/pdf', 999, repeat('a', 64));
+      raise exception 'AUTOTEST: taille différente du stockage acceptée';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    begin
+      perform public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'repas', null, 'Déjeuner', v_chemin, 'image/png', 1234, repeat('a', 64));
+      raise exception 'AUTOTEST: type différent du stockage (et de l''extension) accepté';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    begin
+      perform public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'autre', ' ', 'Déjeuner', v_chemin, 'application/pdf', 1234, repeat('a', 64));
+      raise exception 'AUTOTEST: catégorie « autre » sans précision acceptée';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    v_chemin2 := v_a || '/' || gen_random_uuid() || '.pdf';
+    insert into pg_temp.abs_autotest_objets values (v_chemin2, now() - interval '31 minutes', 50, 'application/pdf');
+    begin
+      perform public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'repas', null, 'Déjeuner', v_chemin2, 'application/pdf', 50, repeat('a', 64));
+      raise exception 'AUTOTEST: dépôt de plus de 30 minutes rattaché';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    v_res := public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'repas', null, '  Déjeuner client  ', v_chemin, 'application/pdf', 1234, repeat('a', 64));
+    v_res2 := public.abs_creer_note(v_admin, v_a, v_j - 1, 12.5, 'repas', null, '  Déjeuner client  ', v_chemin, 'application/pdf', 1234, repeat('a', 64));
+    v_note := (v_res ->> 'id')::uuid;
+    if v_res2 ->> 'id' <> v_res ->> 'id' or (v_res2 ->> 'deja_creee')::boolean is not true
+       or (select objet <> 'Déjeuner client' or not essai from public.notes_de_frais where id = v_note) then
+      raise exception 'AUTOTEST: création de note ou reprise incorrecte (% / %)', v_res, v_res2;
+    end if;
+    -- Contenu d'une note soumise : modifiable par la personne concernée seulement (jamais par l'admin pour autrui).
+    v_chemin2 := v_a || '/' || gen_random_uuid() || '.png';
+    insert into pg_temp.abs_autotest_objets values (v_chemin2, now(), 99, 'image/png');
+    begin
       perform public.abs_modifier_note(v_admin, v_note, v_j - 1, 14, 'repas', null, 'Déjeuner client', v_chemin2, 'image/png', 99, repeat('b', 64));
-      if not public.abs_justificatif_rattache(v_chemin) or not public.abs_justificatif_rattache(v_chemin2) then
-        raise exception 'AUTOTEST: ancien ou nouveau justificatif non rattaché';
+      raise exception 'AUTOTEST: l''admin a modifié la note d''une autre personne';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if;
+      if sqlerrm <> 'Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.' then
+        raise exception 'AUTOTEST: message inattendu (modification par autrui) : %', sqlerrm;
       end if;
-      perform public.abs_decider_note(v_admin, v_note, 'valider', null);
-      begin
-        perform public.abs_modifier_note(v_admin, v_note, v_j - 1, 15, 'repas', null, 'Déjeuner client', null, null, null, null);
-        raise exception 'AUTOTEST: note validée modifiée';
-      exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
-      begin
-        perform public.abs_contexte(v_admin, 'modifier_note', null);
-        update public.notes_de_frais set justificatif_empreinte = repeat('c', 64) where id = v_note;
-        raise exception 'AUTOTEST: justificatif d''une note validée modifié';
-      exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
-      perform public.abs_fin_contexte();
-      perform public.abs_declarer_remboursement(v_admin, v_note, v_j, 'VIR-AUTOTEST');
-      if (public.abs_declarer_remboursement(v_admin, v_note, v_j, 'VIR-AUTOTEST') ->> 'deja_declare')::boolean is not true then
-        raise exception 'AUTOTEST: remboursement rejoué non reconnu';
-      end if;
-      begin
-        perform public.abs_corriger_remboursement(v_admin, v_note, 'annuler', null, null, '');
-        raise exception 'AUTOTEST: correction sans motif acceptée';
-      exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
-      perform public.abs_corriger_remboursement(v_admin, v_note, 'corriger', v_j, 'VIR-AUTOTEST-2', 'Référence erronée');
-      perform public.abs_corriger_remboursement(v_admin, v_note, 'annuler', null, null, 'Remboursement déclaré par erreur');
-      if (select statut <> 'validee' or rembourse_le is not null or montant <> 14
-                 or (select string_agg(e ->> 'action', ',' order by o) from jsonb_array_elements(historique) with ordinality x(e, o))
-                    is distinct from 'soumission,modification,validation,remboursement_declare,remboursement_corrige,remboursement_annule'
-            from public.notes_de_frais where id = v_note) then
-        raise exception 'AUTOTEST: suivi de la note ou historique incorrect';
-      end if;
-      -- Personne ne décide de sa propre note.
+    end;
+    update public.profiles set collaborateur_id = v_a where id = v_admin;
+    perform public.abs_modifier_note(v_admin, v_note, v_j - 1, 14, 'repas', null, 'Déjeuner client', v_chemin2, 'image/png', 99, repeat('b', 64));
+    update public.profiles set collaborateur_id = v_admin_fiche where id = v_admin;
+    if not public.abs_justificatif_rattache(v_chemin) or not public.abs_justificatif_rattache(v_chemin2) then
+      raise exception 'AUTOTEST: ancien ou nouveau justificatif non rattaché';
+    end if;
+    begin
+      perform public.abs_creer_note(v_admin, v_a, v_j - 1, 10, 'repas', null, 'Réutilisation', v_chemin, 'application/pdf', 1234, repeat('a', 64));
+      raise exception 'AUTOTEST: ancien justificatif rattaché à une seconde note';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    perform public.abs_decider_note(v_admin, v_note, 'valider', null);
+    begin
       update public.profiles set collaborateur_id = v_a where id = v_admin;
-      v_chemin2 := v_a || '/' || gen_random_uuid() || '.jpg';
-      insert into storage.objects (bucket_id, name, metadata)
-      values ('justificatifs', v_chemin2, jsonb_build_object('size', 50, 'mimetype', 'image/jpeg'));
-      v_res := public.abs_creer_note(v_admin, v_a, v_j, 8, 'autre', 'Parking', 'Stationnement', v_chemin2, 'image/jpeg', 50, repeat('d', 64));
-      begin
-        perform public.abs_decider_note(v_admin, (v_res ->> 'id')::uuid, 'valider', null);
-        raise exception 'AUTOTEST: l''admin a validé sa propre note';
-      exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if;
-        if sqlerrm <> 'Personne ne décide de ses propres notes de frais (administrateur compris).' then
-          raise exception 'AUTOTEST: message inattendu (propres notes) : %', sqlerrm;
-        end if;
-      end;
-      update public.profiles set collaborateur_id = v_admin_fiche where id = v_admin;
-      begin
-        perform public.abs_contexte(v_admin, 'modifier_note', null);
-        update public.notes_de_frais set essai = false where id = v_note;
-        raise exception 'AUTOTEST: drapeau essai modifié';
-      exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
-      perform public.abs_fin_contexte();
+      perform public.abs_modifier_note(v_admin, v_note, v_j - 1, 15, 'repas', null, 'Déjeuner client', null, null, null, null);
+      raise exception 'AUTOTEST: note validée modifiée';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    update public.profiles set collaborateur_id = v_admin_fiche where id = v_admin;
+    begin
+      perform public.abs_contexte(v_admin, 'modifier_note', null);
+      update public.notes_de_frais set justificatif_empreinte = repeat('c', 64) where id = v_note;
+      raise exception 'AUTOTEST: justificatif d''une note validée modifié';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    perform public.abs_fin_contexte();
+    perform public.abs_declarer_remboursement(v_admin, v_note, v_j, 'VIR-AUTOTEST');
+    if (public.abs_declarer_remboursement(v_admin, v_note, v_j, 'VIR-AUTOTEST') ->> 'deja_declare')::boolean is not true then
+      raise exception 'AUTOTEST: remboursement rejoué non reconnu';
+    end if;
+    begin
+      perform public.abs_corriger_remboursement(v_admin, v_note, 'annuler', null, null, '');
+      raise exception 'AUTOTEST: correction sans motif acceptée';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    perform public.abs_corriger_remboursement(v_admin, v_note, 'corriger', v_j, 'VIR-AUTOTEST-2', 'Référence erronée');
+    perform public.abs_corriger_remboursement(v_admin, v_note, 'annuler', null, null, 'Remboursement déclaré par erreur');
+    if (select statut <> 'validee' or rembourse_le is not null or montant <> 14
+               or (select string_agg(e ->> 'action', ',' order by o) from jsonb_array_elements(historique) with ordinality x(e, o))
+                  is distinct from 'soumission,modification,validation,remboursement_declare,remboursement_corrige,remboursement_annule'
+          from public.notes_de_frais where id = v_note) then
+      raise exception 'AUTOTEST: suivi de la note ou historique incorrect';
+    end if;
+    -- Personne ne décide de sa propre note.
+    update public.profiles set collaborateur_id = v_a where id = v_admin;
+    v_chemin2 := v_a || '/' || gen_random_uuid() || '.jpg';
+    insert into pg_temp.abs_autotest_objets values (v_chemin2, now(), 50, 'image/jpeg');
+    v_res := public.abs_creer_note(v_admin, v_a, v_j, 8, 'autre', 'Parking', 'Stationnement', v_chemin2, 'image/jpeg', 50, repeat('d', 64));
+    begin
+      perform public.abs_decider_note(v_admin, (v_res ->> 'id')::uuid, 'valider', null);
+      raise exception 'AUTOTEST: l''admin a validé sa propre note';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if;
+      if sqlerrm <> 'Personne ne décide de ses propres notes de frais (administrateur compris).' then
+        raise exception 'AUTOTEST: message inattendu (propres notes) : %', sqlerrm;
+      end if;
+    end;
+    update public.profiles set collaborateur_id = v_admin_fiche where id = v_admin;
+    begin
+      perform public.abs_contexte(v_admin, 'modifier_note', null);
+      update public.notes_de_frais set essai = false where id = v_note;
+      raise exception 'AUTOTEST: drapeau essai modifié';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    perform public.abs_fin_contexte();
+    -- Dépôts abandonnés : seul un dépôt de plus d'une heure jamais rattaché est listé ; un justificatif, même remplacé
+    -- et ancien, ne l'est jamais.
+    v_chemin2 := v_a || '/' || gen_random_uuid() || '.pdf';
+    insert into pg_temp.abs_autotest_objets values (v_chemin2, now() - interval '2 hours', 10, 'application/pdf');
+    update pg_temp.abs_autotest_objets set cree = now() - interval '3 hours' where nom = v_chemin;
+    -- Attendu : le seul dépôt de 2 h (ni le justificatif remplacé de 3 h, ni le dépôt refusé de 31 min, ni les récents).
+    select string_agg(f, ',') into v_liste from public.abs_fichiers_orphelins() f;
+    if v_liste is distinct from v_chemin2 then
+      raise exception 'AUTOTEST: dépôts abandonnés mal repérés (%)', coalesce(v_liste, 'aucun');
     end if;
 
     -- Nettoyage des essais : congés et notes des fiches d'essai disparaissent ; fichiers rendus pour le stockage.
     v_res := public.supprimer_essais_absences();
     if exists (select 1 from public.conges where collaborateur_id in (v_a, v_m))
        or exists (select 1 from public.notes_de_frais where collaborateur_id in (v_a, v_m))
-       or (v_stockage and jsonb_array_length(v_res -> 'chemins') <> 3) then
+       or jsonb_array_length(v_res -> 'chemins') <> 3 then
       raise exception 'AUTOTEST: nettoyage des essais incomplet (%)', v_res;
     end if;
     raise exception 'AUTOTEST_TERMINE';
@@ -1627,6 +1738,12 @@ begin
       raise exception 'Absences : autotest en échec : %', sqlerrm;
     end if;
   end;
+  -- La vraie lecture du stockage est rétablie (définition identique à celle d'avant l'autotest), sans table temporaire.
+  if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'abs_objets_stockes') is distinct from v_definition
+     or to_regclass('pg_temp.abs_autotest_objets') is not null then
+    raise exception 'Absences : lecture du stockage non rétablie après l''autotest';
+  end if;
   select md5(coalesce((select string_agg(c::text, '|' order by c.id) from public.collaborateurs c), '')
           || coalesce((select string_agg(p::text, '|' order by p.id) from public.profiles p), '')
           || coalesce((select string_agg(c::text, '|' order by c.id) from public.conges c), '')
