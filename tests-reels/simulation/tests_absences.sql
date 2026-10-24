@@ -52,8 +52,7 @@ create function abse.solde(p uuid) returns numeric language sql as $$ select sol
 create function abse.rtt(p uuid) returns numeric language sql as $$ select solde_rtt from public.collaborateurs where id = p $$;
 -- Même définition que la colonne droits_rtt_renseignes de la vue (la vue elle-même exige une session utilisateur).
 create function abse.rtt_renseignes(p uuid) returns boolean language sql as $$
-  select exists (select 1 from public.collaborateurs c, jsonb_array_elements(c.historique_soldes) e
-                  where c.id = p and e ->> 'type' = 'rtt' and e ->> 'action' = 'ajustement') $$;
+  select public.abs_solde_renseigne(historique_soldes, 'rtt') from public.collaborateurs where id = p $$;
 grant execute on all functions in schema abse to authenticated, anon, service_role;
 grant all on abse.v to authenticated, service_role;
 
@@ -76,9 +75,10 @@ grant all on abse.v to authenticated, service_role;
 \set SL '\'bbbbbbbb-0000-0000-0000-000000000042\''
 
 -- ===================== Comptes et fiches de TEST (base locale) =====================
-select abse.ok('soldes existants : congés payés inchangés (25), RTT à 0, 2 événements initiaux par fiche',
+select abse.ok('soldes existants : congés payés inchangés (25, « repris »), RTT à 0 « à renseigner », 2 événements par fiche',
   (select bool_and(solde_conges = 25 and solde_rtt = 0 and jsonb_array_length(historique_soldes) = 2
-                   and (historique_soldes -> 0 ->> 'apres')::numeric = 25 and historique_soldes -> 0 ->> 'action' = 'initial'
+                   and (historique_soldes -> 0 ->> 'apres')::numeric = 25 and historique_soldes -> 0 ->> 'action' = 'repris'
+                   and historique_soldes -> 1 ->> 'action' = 'a_renseigner'
                    and historique_soldes -> 1 ->> 'type' = 'rtt' and historique_soldes -> 1 ->> 'motif' like 'Droits RTT non renseignés%')
      from public.collaborateurs) and (select count(*) = 3 from public.collaborateurs));
 insert into public.collaborateurs (id, nom, prenom, email, poste, taux_horaire) values
@@ -113,13 +113,34 @@ insert into auth.sessions (id, user_id) values
   ('bbbbbbbb-0000-0000-0000-000000000044', 'aaaaaaaa-0000-0000-0000-000000000044'),
   ('bbbbbbbb-0000-0000-0000-000000000047', 'aaaaaaaa-0000-0000-0000-000000000047');
 
-select abse.ok('nouvelle fiche : congés payés à la valeur de création (défaut 25 de la table), RTT 0 non renseignés',
-  (select solde_conges = 25 and solde_rtt = 0 and jsonb_array_length(historique_soldes) = 2
-          and historique_soldes -> 0 ->> 'motif' = 'Solde à la création de la fiche.'
+select abse.ok('nouvelle fiche : aucune attribution automatique (0 jour), congés payés et RTT « à renseigner »',
+  (select solde_conges = 0 and solde_rtt = 0 and jsonb_array_length(historique_soldes) = 2
+          and historique_soldes -> 0 ->> 'action' = 'a_renseigner' and historique_soldes -> 1 ->> 'action' = 'a_renseigner'
+          and not public.abs_solde_renseigne(historique_soldes, 'conges_payes') and not public.abs_solde_renseigne(historique_soldes, 'rtt')
      from public.collaborateurs where id = :FHUG));
+select abse.ok('valeur par défaut de la colonne : 0 (plus de 25 jours automatiques)',
+  (select column_default = '0' from information_schema.columns where table_name = 'collaborateurs' and column_name = 'solde_conges'));
+select abse.refus('fiche créée avec 25 jours de congés payés : refusée',
+  $q$insert into public.collaborateurs (nom, solde_conges) values ('X', 25)$q$,
+  'Une nouvelle fiche démarre avec des soldes à 0, « à renseigner » : aucune attribution automatique ; l''administrateur confirme ensuite chaque solde (même 0), avec un motif.', true);
 select abse.refus('fiche créée avec un solde RTT : refusée',
   $q$insert into public.collaborateurs (nom, solde_rtt) values ('X', 2)$q$,
-  'Une nouvelle fiche démarre avec un solde RTT à 0 (droits non renseignés) ; renseignez-le ensuite par un ajustement motivé.', true);
+  'Une nouvelle fiche démarre avec des soldes à 0, « à renseigner » : aucune attribution automatique ; l''administrateur confirme ensuite chaque solde (même 0), avec un motif.', true);
+select abse.put('c_hugo0', public.abs_demander_conge(:H, :FHUG, 'conges_payes', abse.j(150), abse.j(150), false, false, 1, null, null)::text);
+select abse.refus('congés payés « à renseigner » : validation refusée, message explicite',
+  $q$select public.abs_decider_conge('11111111-1111-1111-1111-111111111111', abse.get('c_hugo0')::uuid, 'valider', null)$q$,
+  'Solde de congés payés insuffisant : 0 jour(s) disponible(s), 1 demandé(s) (solde à renseigner). Validation refusée.', true);
+select abse.passe('admin : confirmation explicite d''un solde à 0 (congés payés de Hugo)',
+  $q$select public.abs_ajuster_solde('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-2222222222c2', 'conges_payes', 0, 0, 'Arrivée récente : aucun droit acquis (confirmé)')$q$);
+select abse.ok('confirmation à 0 tracée (action « confirmation », avant 0, après 0, motif, auteur) ; solde désormais renseigné',
+  (select e ->> 'action' = 'confirmation' and e ->> 'type' = 'conges_payes' and (e ->> 'avant')::numeric = 0 and (e ->> 'apres')::numeric = 0
+          and e ->> 'motif' = 'Arrivée récente : aucun droit acquis (confirmé)' and (e ->> 'auteur')::uuid = :ADMIN
+     from (select historique_soldes -> -1 as e from public.collaborateurs where id = :FHUG) x)
+  and (select public.abs_solde_renseigne(historique_soldes, 'conges_payes') from public.collaborateurs where id = :FHUG));
+select abse.refus('après confirmation à 0 : validation refusée (solde réellement insuffisant)',
+  $q$select public.abs_decider_conge('11111111-1111-1111-1111-111111111111', abse.get('c_hugo0')::uuid, 'valider', null)$q$,
+  'Solde de congés payés insuffisant : 0 jour(s) disponible(s), 1 demandé(s). Validation refusée.', true);
+select public.abs_decider_conge(:ADMIN, abse.get('c_hugo0')::uuid, 'refuser', 'Solde nul');
 select abse.refus('clé secrète : solde modifié directement, refusé',
   $q$update public.collaborateurs set solde_conges = 30 where id = '22222222-2222-2222-2222-222222222221'$q$,
   'Soldes de congés : modification directe interdite ; utilisez un ajustement motivé (administrateur).', true);
@@ -531,10 +552,18 @@ select abse.ok('admin : note pour autrui (« autre » + précision), auteur trac
 -- Modification tant que « soumise ».
 select abse.refus('modification par un collègue : refusée',
   $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000043', abse.get('n1')::uuid, current_date - 2, 40, 'repas', null, 'Déjeuner', null, null, null, null)$q$,
-  'Vous ne pouvez modifier que vos propres notes de frais.', true);
+  'Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.', true);
 select abse.refus('modification par le manager : refusée (il décide, il ne corrige pas)',
   $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000041', abse.get('n1')::uuid, current_date - 2, 40, 'repas', null, 'Déjeuner', null, null, null, null)$q$,
-  'Vous ne pouvez modifier que vos propres notes de frais.', true);
+  'Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.', true);
+select abse.refus('modification par l''administrateur de la note d''une autre personne : refusée',
+  $q$select public.abs_modifier_note('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, current_date - 2, 1, 'repas', null, 'Corrigé par l''admin', null, null, null, null)$q$,
+  'Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.', true);
+select abse.refus('note déposée par l''admin POUR Léa : l''admin ne la modifie pas non plus',
+  $q$select public.abs_modifier_note('11111111-1111-1111-1111-111111111111', abse.get('n2')::uuid, current_date - 1, 1, 'autre', 'Péage', 'Autoroute', null, null, null, null)$q$,
+  'Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.', true);
+select abse.ok('contenu des notes inchangé après ces refus',
+  (select montant = 42.5 from public.notes_de_frais where id = abse.get('n1')::uuid) and (select montant = 18 from public.notes_de_frais where id = abse.get('n2')::uuid));
 select abse.put('f1b', abse.depot(:FLEA, 'png', 'image/png', 777));
 select abse.passe('collaboratrice : montant corrigé et justificatif remplacé (note soumise)',
   $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n1')::uuid, current_date - 2, 40, 'repas', null, 'Déjeuner chantier', abse.get('f1b'), 'image/png', 777, repeat('b', 64))$q$);

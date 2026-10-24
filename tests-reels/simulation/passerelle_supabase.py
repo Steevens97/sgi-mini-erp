@@ -227,6 +227,13 @@ class Passerelle(BaseHTTPRequestHandler):
 
     def stockage(self, methode, chemin):
         # /object/<bucket>/<chemin>
+        if chemin.startswith("/bucket/") and methode == "GET":
+            j = self.jeton()
+            if not j or j.get("role") != "service_role":
+                return self.repondre(400, {"statusCode": "404", "message": "Bucket not found"})
+            b = sql("select row_to_json(x) from (select id, name, public, file_size_limit, allowed_mime_types from storage.buckets "
+                    "where id = :'p0') x", chemin[len("/bucket/"):].split("?")[0])
+            return self.repondre(200, json.loads(b)) if b else self.repondre(400, {"statusCode": "404", "message": "Bucket not found"})
         if not chemin.startswith("/object/"):
             return self.repondre(404, {"message": "non imité"})
         adresse, _, requete = chemin.partition("?")
@@ -261,7 +268,7 @@ class Passerelle(BaseHTTPRequestHandler):
             prefixe = (json.loads(self.corps() or b"{}").get("prefix") or "").strip("/")
             if prefixe:
                 # Comme Supabase : fichiers du dossier demandé, noms relatifs à ce dossier, avec un identifiant.
-                noms = sql("select coalesce(json_agg(json_build_object('name', substr(name, length(:'p1') + 2), 'id', id)), '[]') "
+                noms = sql("select coalesce(json_agg(json_build_object('name', substr(name, length(:'p1') + 2), 'id', id, 'metadata', metadata)), '[]') "
                            "from storage.objects where bucket_id = :'p0' and name like :'p1' || '/%' "
                            "and position('/' in substr(name, length(:'p1') + 2)) = 0", bucket, prefixe)
                 return self.repondre(200, json.loads(noms))

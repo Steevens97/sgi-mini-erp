@@ -8,7 +8,7 @@ import { demanderConge } from "./actions";
 
 const l = "block text-sm font-medium text-slate-700";
 
-export type SoldeAffiche = { cp: number; rtt: number; rttRenseignes: boolean };
+export type SoldeAffiche = { cp: number; rtt: number; cpRenseigne: boolean; rttRenseignes: boolean };
 
 // Demande de congé. Le nombre de jours est SAISI (aucun calendrier des jours fériés) : l'estimation affichée
 // n'est qu'une aide et n'est jamais enregistrée à la place de la saisie. La base revérifie tout.
@@ -113,13 +113,19 @@ function CorpsConge({ fiches, estAdmin, aujourdhui, temps, soldes, s }: Paramete
           Rien ne sera modifié automatiquement : vérifiez ces temps avec la personne concernée.
         </p>
       )}
+      {type === "conges_payes" && solde && !solde.cpRenseigne && (
+        <p role="note" className="mt-2 text-sm text-amber-800">
+          Solde de congés payés à renseigner pour cette personne : la demande peut être enregistrée, mais sa validation sera
+          refusée tant que l&apos;administrateur n&apos;aura pas confirmé le solde.
+        </p>
+      )}
       {type === "rtt" && solde && !solde.rttRenseignes && (
         <p role="note" className="mt-2 text-sm text-amber-800">
           Droits RTT non renseignés pour cette personne : la demande peut être enregistrée, mais sa validation sera refusée tant
           que l&apos;administrateur n&apos;aura pas renseigné les droits.
         </p>
       )}
-      {disponible !== undefined && n > disponible && (solde?.rttRenseignes || type !== "rtt") && (
+      {disponible !== undefined && n > disponible && (type === "rtt" ? solde?.rttRenseignes : solde?.cpRenseigne) && (
         <p role="note" className="mt-2 text-sm text-amber-800">
           Solde actuel : {nombreFr(disponible)} jour(s). La validation sera refusée si le solde reste insuffisant.
         </p>

@@ -48,7 +48,9 @@ export function FormulaireNote({ fiches, estAdmin, aujourdhui, note }: {
         const p = await preparerDepotJustificatif(fiche, choisi.type, choisi.size);
         if (!p.ok) return setEtat({ statut: "erreur", message: p.message });
         try {
-          const r = await fetch(p.url, { method: "PUT", body: choisi, headers: { "content-type": choisi.type, "x-upsert": "false" } });
+          // Mêmes en-têtes que le client officiel : clé PUBLIQUE (jamais la clé secrète) et aucun écrasement.
+          const r = await fetch(p.url, { method: "PUT", body: choisi, headers: {
+            "content-type": choisi.type, "x-upsert": "false", apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "" } });
           if (!r.ok) return setEtat({ statut: "erreur", message: `Envoi du fichier refusé par le stockage (code ${r.status}). Rien n'a été enregistré.` });
         } catch {
           return setEtat({ statut: "erreur", message: "Envoi du fichier interrompu (réseau). Rien n'a été enregistré : réessayez." });

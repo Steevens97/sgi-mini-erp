@@ -14,9 +14,9 @@ export default async function PageSoldes({ searchParams }: { searchParams: Promi
   const moi = await exigerAdmin();
   const supabase = await creerClientServeur();
   const { data } = await supabase.from("absences_soldes")
-    .select("id, nom, prenom, date_sortie, solde_conges, solde_rtt, droits_rtt_renseignes, historique_soldes").order("nom");
+    .select("id, nom, prenom, date_sortie, solde_conges, solde_rtt, conges_payes_renseignes, droits_rtt_renseignes, historique_soldes").order("nom");
   const soldes = (data ?? []) as { id: string; nom: string; prenom: string | null; date_sortie: string | null; solde_conges: number;
-    solde_rtt: number; droits_rtt_renseignes: boolean; historique_soldes: EvenementAbsences[] }[];
+    solde_rtt: number; conges_payes_renseignes: boolean; droits_rtt_renseignes: boolean; historique_soldes: EvenementAbsences[] }[];
   return (
     <div className="space-y-6">
       {confirmation && <p role="status" data-confirmation className="rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{confirmation}</p>}
@@ -26,7 +26,8 @@ export default async function PageSoldes({ searchParams }: { searchParams: Promi
         <p className="mt-1 text-sm text-slate-600">
           Aucune acquisition automatique : chaque ajustement est saisi ici avec un motif et reste dans l&apos;historique.
           RTT « droits non renseignés » : aucune valeur n&apos;a encore été renseignée (ce n&apos;est pas une absence de droits).
-          Vous ne pouvez pas ajuster votre propre solde.
+          Vous ne pouvez pas ajuster votre propre solde. Une nouvelle fiche démarre à 0 jour, « Solde à renseigner » : pour
+          confirmer un solde, même 0, saisissez sa valeur avec un motif — la confirmation est inscrite dans l&apos;historique.
         </p>
       </div>
       <table className="w-full rounded-lg border border-slate-200 bg-white text-sm [&_td]:pr-3 [&_th]:pr-3">
@@ -35,7 +36,7 @@ export default async function PageSoldes({ searchParams }: { searchParams: Promi
           {soldes.map((s) => (
             <tr key={s.id} className="border-t border-slate-100 align-top" data-fiche={s.id}>
               <td className="px-3 py-2">{nomComplet(s)}{s.date_sortie && <span className="block text-xs text-slate-500">sortie le {s.date_sortie.split("-").reverse().join("/")}</span>}</td>
-              <td>{nombreFr(s.solde_conges)} j</td>
+              <td>{s.conges_payes_renseignes ? `${nombreFr(s.solde_conges)} j` : <span className="text-amber-800">Solde à renseigner</span>}</td>
               <td>{s.droits_rtt_renseignes ? `${nombreFr(s.solde_rtt)} j` : <span className="text-amber-800">droits non renseignés</span>}</td>
               <td className="space-y-1 py-2 pr-3">
                 {s.id === moi.collaborateurId ? (

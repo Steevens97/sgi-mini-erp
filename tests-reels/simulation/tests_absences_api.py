@@ -122,6 +122,8 @@ s, c = appel(f"/conges?select=id&collaborateur_id=eq.{FLEA}&limit=1", SERVICE)
 conge = lignes(c)[0]["id"]
 s, n = appel(f"/notes_de_frais?select=id&collaborateur_id=eq.{FLEA}&limit=1", SERVICE)
 note = lignes(n)[0]["id"]
+s, avant_c = appel(f"/conges?select=statut&id=eq.{conge}", SERVICE)
+s, avant_n = appel(f"/notes_de_frais?select=montant,statut&id=eq.{note}", SERVICE)
 ecritures = [
     ("Collaboratrice : création d'un congé", LEA, "POST", "/conges", {"collaborateur_id": FLEA, "date_debut": "2027-03-01", "date_fin": "2027-03-01"}),
     ("Manager : validation directe d'un congé", BRUNO, "PATCH", f"/conges?id=eq.{conge}", {"statut": "validee"}),
@@ -139,8 +141,7 @@ for libelle, j, m, chemin, corps in ecritures:
     verifier(libelle + " : refusé", s in (400, 401, 403), f"HTTP {s}")
 s, r = appel(f"/conges?select=statut&id=eq.{conge}", SERVICE)
 s2, r2 = appel(f"/notes_de_frais?select=montant,statut&id=eq.{note}", SERVICE)
-verifier("après ces tentatives : congé et note inchangés", lignes(r)[0]["statut"] == "validee" and lignes(r2)[0]["statut"] == "validee"
-         and float(lignes(r2)[0]["montant"]) == 40, f"{lignes(r)} {lignes(r2)}")
+verifier("après ces tentatives : congé et note inchangés", lignes(r) == lignes(avant_c) and lignes(r2) == lignes(avant_n), f"{lignes(r)} {lignes(r2)}")
 s, r = appel("/collaborateurs?select=id", ADMIN, "POST",
              {"nom": "Compat-API", "prenom": "U", "email": "compat-api@exemple.invalid", "poste": "Essai", "date_entree": "2026-10-01", "taux_horaire": 1},
              {"Prefer": "return=representation"})

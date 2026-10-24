@@ -41,6 +41,9 @@ export const LIBELLES_EVENEMENT_ABSENCES: Record<string, string> = {
   remboursement_corrige: "Déclaration de remboursement corrigée",
   remboursement_annule: "Déclaration de remboursement annulée",
   initial: "Solde initial",
+  repris: "Solde repris (existant avant le module)",
+  a_renseigner: "Solde à renseigner (aucune attribution automatique)",
+  confirmation: "Confirmation explicite du solde",
   ajustement: "Ajustement motivé",
   prelevement: "Prélèvement à la validation",
 };
@@ -183,7 +186,7 @@ export const CONFIRMATIONS_ABSENCES: Record<string, string> = {
   conge_valide: "Demande validée ; le solde est prélevé une seule fois.",
   conge_refuse: "Demande refusée (motif enregistré) ; ses dates sont libérées.",
   conge_deja: "Décision déjà enregistrée : rien n'a été modifié (aucun second prélèvement).",
-  solde: "Solde ajusté ; l'ancienne valeur, la nouvelle et le motif sont dans l'historique.",
+  solde: "Solde enregistré (ajustement, ou confirmation si la valeur est inchangée) ; l'ancienne valeur, la nouvelle et le motif sont dans l'historique.",
   note_validee: "Note validée : son contenu et son justificatif sont désormais figés.",
   note_refusee: "Note refusée (motif enregistré).",
   note_deja: "Décision déjà enregistrée : rien n'a été modifié.",

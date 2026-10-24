@@ -58,6 +58,18 @@ async function demande(p, { type = "conges_payes", debut, fin, apresMidi = false
   return f;
 }
 const formNote = (p) => p.locator("form[data-formulaire-note=nouvelle]");
+// Falsification des requêtes envoyées par la page au serveur (comme un utilisateur malveillant avec les outils du
+// navigateur) : remplace un motif dans le corps des appels d'actions serveur.
+async function falsifier(page, motif, vers) {
+  const h = async (route) => {
+    const r = route.request(); const corps = r.postData();
+    if (r.method() === "POST" && r.headers()["next-action"] && corps && motif.test(corps)) return route.continue({ postData: corps.replace(motif, vers) });
+    return route.continue();
+  };
+  await page.route("**/rh/notes-de-frais**", h);
+  return () => page.unroute("**/rh/notes-de-frais**", h);
+}
+const objetsDe = (fiche) => Number(sql(`select count(*) from storage.objects where bucket_id = 'justificatifs' and name like '${fiche}/%'`));
 async function note(p, { date, montant, categorie = "repas", precision, objet, fichier }) {
   const f = formNote(p);
   await f.locator("input[name=date_depense]").fill(date);
@@ -72,6 +84,8 @@ async function note(p, { date, montant, categorie = "repas", precision, objet, f
 
 // ============================ Collaboratrice (Léa Moreau) ============================
 const l = await connexion("collab@exemple.invalid", "Essai-Collab-2026!");
+const liensDepot = [];
+l.on("request", (r) => { if (r.method() === "PUT" && r.url().includes("/object/upload/sign/")) liensDepot.push(r.url()); });
 console.log("== Collaboratrice — soldes et demandes");
 await l.goto(B + "/absences");
 let soldes = await l.locator("[data-mes-soldes]").textContent();
@@ -157,6 +171,49 @@ await l.goto(B + "/rh/notes-de-frais");
 const ancien = await l.request.get(`${B}/rh/notes-de-frais/${n1}/justificatif?ancien=0`);
 verifier("ancien justificatif consultable (même contrôle d'empreinte)", ancien.ok() && sha(await ancien.body()) === sha(fichiers.vrai[1]));
 
+console.log("== Dépôt direct : tentatives de contournement (requêtes falsifiées)");
+// 1. Remplacer un fichier déjà rattaché en rejouant le lien de dépôt capturé dans le navigateur.
+const lien1 = liensDepot.find((u) => u.includes(chemin1));
+const avantSha = sha(readFileSync(`${STOCKAGE}/${chemin1}`));
+for (const upsert of ["false", "true"]) {
+  const r = await fetch(lien1, { method: "PUT", body: fichiers.second[1], headers: { "content-type": "application/pdf", "x-upsert": upsert } });
+  verifier(`fichier rattaché : lien de dépôt rejoué (x-upsert ${upsert}) refusé`, !r.ok, `HTTP ${r.status}`);
+}
+verifier("fichier rattaché inchangé (même empreinte) et toujours rattaché", sha(readFileSync(`${STOCKAGE}/${chemin1}`)) === avantSha
+  && sql(`select public.abs_justificatif_rattache('${chemin1}')`) === "t");
+// 2. Demander un lien de dépôt pour le dossier d'une collègue (identifiant de fiche falsifié).
+const avantNgu = objetsDe(NGU), avantLea = objetsDe(LEA);
+let stop = await falsifier(l, new RegExp(`"${LEA}"`), `"${NGU}"`);
+await l.goto(B + "/rh/notes-de-frais");
+await note(l, { date: J(-1), montant: "9", objet: "Falsifié dossier", fichier: fichiers.second[0] });
+verifier("lien de dépôt pour le dossier d'une collègue : refusé par le serveur", await vu(l, "Vous ne pouvez déposer des justificatifs que pour vous-même."));
+await stop();
+verifier("rien déposé dans le dossier de la collègue ni ailleurs", objetsDe(NGU) === avantNgu && objetsDe(LEA) === avantLea);
+// Fichier d'une collègue, déjà rattaché à SA note.
+const cheminNgu = `${NGU}/0f8fad5b-d9cb-469f-a165-70867728950e.pdf`;
+mkdirSync(`${STOCKAGE}/${NGU}`, { recursive: true }); writeFileSync(`${STOCKAGE}/${cheminNgu}`, fichiers.second[1]);
+sql(`insert into storage.objects (bucket_id, name, metadata) values ('justificatifs', '${cheminNgu}', '{"size": ${fichiers.second[1].length}, "mimetype": "application/pdf"}')`);
+sql(`set role service_role; select public.abs_creer_note('aaaaaaaa-0000-0000-0000-0000000000b5', '${NGU}', '${J(-1)}', 30, 'hebergement', null, 'Hôtel (Chloé)', '${cheminNgu}', 'application/pdf', ${fichiers.second[1].length}, '${sha(fichiers.second[1])}')`);
+const shaNgu = sha(readFileSync(`${STOCKAGE}/${cheminNgu}`));
+// 3. Créer sa note en désignant le fichier de la collègue (chemin falsifié après un vrai dépôt).
+stop = await falsifier(l, new RegExp(`${LEA}/[0-9a-f-]{36}\\.pdf`), cheminNgu);
+await l.goto(B + "/rh/notes-de-frais");
+await note(l, { date: J(-1), montant: "9", objet: "Falsifié chemin", fichier: fichiers.second[0] });
+verifier("note désignant le fichier d'une collègue : refusée (emplacement non conforme)", await vu(l, "emplacement non conforme"));
+await stop();
+verifier("fichier de la collègue intact et toujours rattaché à SA note ; aucune note créée",
+  sha(readFileSync(`${STOCKAGE}/${cheminNgu}`)) === shaNgu && sql(`select count(*) from public.notes_de_frais where justificatif_url = '${cheminNgu}' and collaborateur_id = '${NGU}'`) === "1"
+  && sql("select count(*) from public.notes_de_frais where objet like 'Falsifié%'") === "0");
+// 4. Créer une seconde note en désignant son propre fichier déjà rattaché (contenu contrôlé ≠ nouveau dépôt).
+const actuel = sql(`select justificatif_url from public.notes_de_frais where id = '${n1}'`);
+stop = await falsifier(l, new RegExp(`${LEA}/[0-9a-f-]{36}\\.pdf`), actuel);
+await l.goto(B + "/rh/notes-de-frais");
+await note(l, { date: J(-1), montant: "9", objet: "Falsifié rattaché", fichier: fichiers.second[0] });
+verifier("note désignant un fichier déjà rattaché : refusée", (await vu(l, "déjà rattaché")) || (await vu(l, "emplacement non conforme")));
+await stop();
+verifier("fichier rattaché intact, aucune note créée, aucun fichier supprimé",
+  existsSync(`${STOCKAGE}/${actuel}`) && sql("select count(*) from public.notes_de_frais where objet like 'Falsifié%'") === "0");
+
 // ============================ Manager de l'équipe (Dubois) ============================
 const m = await connexion("manager@exemple.invalid", "Essai-Manager-2026!");
 console.log("== Manager de l'équipe — décisions");
@@ -195,7 +252,9 @@ const c = await connexion("chloe@exemple.invalid", "Essai-Chloe-2026!");
 const rc = await c.request.get(`${B}/rh/notes-de-frais/${n1}/justificatif`, { maxRedirects: 0 });
 verifier("collègue de la même équipe : justificatif de Léa refusé", rc.status() === 404, `HTTP ${rc.status()}`);
 await c.goto(B + "/rh/notes-de-frais");
-verifier("collègue : aucune note de Léa listée", (await c.locator(`tr[data-note="${n1}"]`).count()) === 0 && (await c.locator("tr[data-note]").count()) === 0);
+const notesLea = sql(`select string_agg(id::text, ',') from public.notes_de_frais where collaborateur_id = '${LEA}'`).split(",");
+let visibles = 0; for (const id of notesLea) visibles += await c.locator(`tr[data-note="${id}"]`).count();
+verifier("collègue : aucune note de Léa listée (seulement la sienne)", visibles === 0 && (await c.locator("tr[data-note]").count()) === 1);
 await c.goto(B + "/absences");
 verifier("collègue : soldes de Léa invisibles (seulement les siens)", (await c.locator("[data-mes-soldes]").textContent()).includes("Congés payés : 25 jour(s)")
   && !(await c.content()).includes("23,5"));
@@ -207,14 +266,28 @@ verifier("visiteur non connecté : renvoyé vers la connexion", [302, 303, 307].
 const a = await connexion("sgi@gmx.fr", "Essai-Admin-2026!");
 console.log("== Administrateur — soldes, décisions, remboursements");
 await a.goto(B + "/absences/soldes");
-const ligneLea = a.locator(`tr[data-fiche="${LEA}"]`);
-verifier("vue globale : Léa 23,5 j, RTT « droits non renseignés »", (await ligneLea.textContent()).includes("23,5 j") && (await ligneLea.textContent()).includes("droits non renseignés"));
+const ligneLea0 = a.locator(`tr[data-fiche="${LEA}"]`);
+verifier("vue globale : Léa 23,5 j, RTT « droits non renseignés »", (await ligneLea0.textContent()).includes("23,5 j") && (await ligneLea0.textContent()).includes("droits non renseignés"));
 verifier("sa propre fiche : aucun formulaire d'ajustement", (await a.locator(`tr[data-fiche="${FADM}"]`).textContent()).includes("ajustement par un autre administrateur"));
+const KARIM = "22222222-2222-2222-2222-2222222222c1";
+verifier("nouvelles fiches : « Solde à renseigner » (aucune attribution automatique de 25 jours)",
+  (await a.locator(`tr[data-fiche="${KARIM}"]`).textContent()).includes("Solde à renseigner") && sql(`select solde_conges from public.collaborateurs where id = '${KARIM}'`) === "0.00");
+await a.locator(`tr[data-fiche="${KARIM}"] select[name=type]`).selectOption("conges_payes");
+await a.locator(`tr[data-fiche="${KARIM}"] input[name=nouveau]`).fill("0");
+await a.locator(`tr[data-fiche="${KARIM}"] input[name=motif]`).fill("Aucun droit acquis à ce jour (confirmé)");
+await a.locator(`tr[data-fiche="${KARIM}"] button`, { hasText: "Ajuster" }).click();
+verifier("confirmation explicite d'un solde à 0", await vu(a, "Solde enregistré", "[data-confirmation]"));
+await a.goto(B + "/absences/soldes");
+verifier("confirmation à 0 tracée et solde affiché « 0 j » (renseigné)", (await a.locator(`tr[data-fiche="${KARIM}"]`).textContent()).includes("0 j")
+  && (await a.locator(`tr[data-fiche="${KARIM}"]`).textContent()).includes("Confirmation explicite du solde")
+  && sql(`select historique_soldes -> -1 ->> 'action' || '/' || ((historique_soldes -> -1 ->> 'apres')::numeric = 0) from public.collaborateurs where id = '${KARIM}'`) === "confirmation/true");
+await a.goto(B + "/absences/soldes");
+const ligneLea = a.locator(`tr[data-fiche="${LEA}"]`);
 await ligneLea.locator("select[name=type]").selectOption("rtt");
 await ligneLea.locator("input[name=nouveau]").fill("3");
 await ligneLea.locator("input[name=motif]").fill("Accord RTT 2026 (essai)");
 await ligneLea.locator("button", { hasText: "Ajuster" }).click();
-verifier("droits RTT renseignés (0 → 3), motivés", await vu(a, "Solde ajusté", "[data-confirmation]"));
+verifier("droits RTT renseignés (0 → 3), motivés", await vu(a, "Solde enregistré", "[data-confirmation]"));
 await a.goto(B + "/absences/soldes");
 verifier("RTT de Léa affiché 3 j, historique avec le motif", (await a.locator(`tr[data-fiche="${LEA}"]`).textContent()).includes("3 j")
   && (await a.locator(`tr[data-fiche="${LEA}"]`).textContent()).includes("Accord RTT 2026 (essai)"));

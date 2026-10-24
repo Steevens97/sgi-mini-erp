@@ -75,8 +75,9 @@ export default async function PageNotesDeFrais({ searchParams }: { searchParams:
         <Link href="/rh" className="text-sm text-slate-600 underline">← RH</Link>
         <h1 className="mt-2 text-2xl font-semibold">Notes de frais</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Montant TTC, justificatif obligatoire (PDF, JPEG ou PNG, 10 Mo au plus). Une note validée, refusée ou remboursée ne se
-          modifie plus. Personne ne décide de ses propres notes. Le remboursement est une déclaration de l&apos;administrateur :
+          Montant TTC, justificatif obligatoire (PDF, JPEG ou PNG, 10 Mo au plus). Seule la personne concernée modifie sa note
+          tant qu&apos;elle est soumise ; un responsable la valide ou la refuse avec un motif. Une note validée, refusée ou remboursée
+          ne se modifie plus. Personne ne décide de ses propres notes. Le remboursement est une déclaration de l&apos;administrateur :
           aucun virement n&apos;est effectué par l&apos;application.
         </p>
       </div>
@@ -120,11 +121,6 @@ export default async function PageNotesDeFrais({ searchParams }: { searchParams:
                 <tr key={n.id} className="border-t border-slate-100 align-top" data-note={n.id}>
                   {cellules(n, true)}
                   <td className="space-y-1 py-2 pr-3">
-                    {estAdmin && (
-                      <details><summary className="cursor-pointer text-xs underline">Corriger avant décision</summary>
-                        <FormulaireNote fiches={[{ id: n.collaborateur_id, libelle: nomComplet(parFiche.get(n.collaborateur_id)) }]} estAdmin aujourdhui={aujourdhui} note={n} />
-                      </details>
-                    )}
                     <FormulaireAction action={deciderNote} caches={{ note_id: n.id, decision: "valider" }} libelle="Valider" principal />
                     <FormulaireAction action={deciderNote} caches={{ note_id: n.id, decision: "refuser" }} libelle="Refuser" className="flex gap-1">
                       <input name="motif" required placeholder="motif du refus" className={`${champ} mt-0 w-40`} />

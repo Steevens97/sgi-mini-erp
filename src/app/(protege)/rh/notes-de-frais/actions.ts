@@ -104,7 +104,10 @@ export async function modifierNote(_e: EtatNote, d: FormData): Promise<EtatNote>
   const note = texte(d, "note_id");
   const collaborateur = texte(d, "collaborateur_id");
   if (!note || !collaborateur) return erreur("Note introuvable.");
-  if (moi.role !== "admin" && collaborateur !== moi.collaborateurId) return erreur("Vous ne pouvez modifier que vos propres notes de frais.");
+  // Personne d'autre que la personne concernée (administrateur compris) ne modifie une note : on la valide ou on la refuse.
+  if (collaborateur !== moi.collaborateurId) {
+    return erreur("Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.");
+  }
   const f = champsNote(d);
   const r = controleChamps(f);
   if (r) return erreur(r);

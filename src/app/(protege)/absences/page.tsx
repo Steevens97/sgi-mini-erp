@@ -16,7 +16,7 @@ type Conge = {
   solde_preleve: number | null; historique: EvenementAbsences[]; essai: boolean;
 };
 type Solde = { id: string; nom: string; prenom: string | null; manager_id: string | null; solde_conges: number; solde_rtt: number;
-  droits_rtt_renseignes: boolean; historique_soldes: EvenementAbsences[] };
+  conges_payes_renseignes: boolean; droits_rtt_renseignes: boolean; historique_soldes: EvenementAbsences[] };
 
 // Tout est lu avec la session de l'utilisateur : la base ne renvoie que ce qu'il a le droit de voir (ses congés et
 // ses soldes ; manager : son équipe directe ; admin : tout). Personne ne décide de ses propres congés.
@@ -26,7 +26,7 @@ export default async function PageAbsences({ searchParams }: { searchParams: Pro
   const supabase = await creerClientServeur();
   const aujourdhui = aujourdhuiMartinique();
   const [{ data: soldesLus }, { data: congesLus }, { data: fiches }] = await Promise.all([
-    supabase.from("absences_soldes").select("id, nom, prenom, manager_id, solde_conges, solde_rtt, droits_rtt_renseignes, historique_soldes").order("nom"),
+    supabase.from("absences_soldes").select("id, nom, prenom, manager_id, solde_conges, solde_rtt, conges_payes_renseignes, droits_rtt_renseignes, historique_soldes").order("nom"),
     supabase.from("conges").select("id, collaborateur_id, type, date_debut, date_fin, debut_apres_midi, fin_midi, nb_jours, motif, motif_retroactif, statut, demande_par_nom, decide_par_nom, decide_le, motif_decision, solde_preleve, historique, essai")
       .order("date_debut", { ascending: false }),
     supabase.from("collaborateurs").select("id, nom, prenom, manager_id, date_sortie").order("nom"),
@@ -51,7 +51,7 @@ export default async function PageAbsences({ searchParams }: { searchParams: Pro
     ? (fiches ?? []).filter((f) => !f.date_sortie || f.date_sortie >= aujourdhui).map((f) => ({ id: f.id, libelle: nomComplet(f) }))
     : (fiches ?? []).filter((f) => f.id === moi.collaborateurId).map((f) => ({ id: f.id, libelle: nomComplet(f) }));
   const soldesFormulaire: Record<string, SoldeAffiche> = Object.fromEntries(
-    soldes.map((s) => [s.id, { cp: Number(s.solde_conges), rtt: Number(s.solde_rtt), rttRenseignes: s.droits_rtt_renseignes }]));
+    soldes.map((s) => [s.id, { cp: Number(s.solde_conges), rtt: Number(s.solde_rtt), cpRenseigne: s.conges_payes_renseignes, rttRenseignes: s.droits_rtt_renseignes }]));
   const peutDecider = (c: Conge) => c.collaborateur_id !== moi.collaborateurId
     && (estAdmin || (moi.role === "manager" && !!moi.collaborateurId && parFiche.get(c.collaborateur_id)?.manager_id === moi.collaborateurId));
   const mesConges = conges.filter((c) => c.collaborateur_id === moi.collaborateurId);
@@ -99,7 +99,10 @@ export default async function PageAbsences({ searchParams }: { searchParams: Pro
         <h2 className="mb-2 font-semibold">Mes soldes</h2>
         {mien ? (
           <div className="flex flex-wrap gap-4 rounded-lg border border-slate-200 bg-white p-4 text-sm" data-mes-soldes>
-            <p>Congés payés : <strong>{nombreFr(mien.solde_conges)} jour(s)</strong></p>
+            <p>Congés payés : {mien.conges_payes_renseignes ? <strong>{nombreFr(mien.solde_conges)} jour(s)</strong>
+              : <strong className="text-amber-800">Solde à renseigner</strong>}
+              {!mien.conges_payes_renseignes && <span className="block text-xs text-slate-600">En attente de la confirmation de l&apos;administrateur (aucune attribution automatique).</span>}
+            </p>
             <p>RTT : {mien.droits_rtt_renseignes ? <strong>{nombreFr(mien.solde_rtt)} jour(s)</strong>
               : <strong className="text-amber-800">droits non renseignés</strong>}
               {!mien.droits_rtt_renseignes && <span className="block text-xs text-slate-600">Cela ne signifie pas que vous n&apos;avez aucun droit : ils n&apos;ont pas encore été renseignés par l&apos;administrateur.</span>}
@@ -150,7 +153,8 @@ export default async function PageAbsences({ searchParams }: { searchParams: Pro
                     <td className="space-y-1 py-2 pr-3">
                       {c.type !== "sans_solde" && s && (
                         <p className={`text-xs ${Number(dispo) < Number(c.nb_jours) ? "text-red-700" : "text-slate-600"}`}>
-                          Solde {LIBELLES_TYPE_ABSENCE[c.type]} : {c.type === "rtt" && !s.droits_rtt_renseignes ? "droits non renseignés" : `${nombreFr(dispo)} j`}
+                          Solde {LIBELLES_TYPE_ABSENCE[c.type]} : {c.type === "rtt" && !s.droits_rtt_renseignes ? "droits non renseignés"
+                            : c.type === "conges_payes" && !s.conges_payes_renseignes ? "solde à renseigner" : `${nombreFr(dispo)} j`}
                           {Number(dispo) < Number(c.nb_jours) ? " — insuffisant : la validation sera refusée." : ""}
                         </p>
                       )}
