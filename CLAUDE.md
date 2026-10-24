@@ -283,8 +283,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Fiche réelle de l'utilisateur : attend ses informations et son taux confirmé.
 - Module Finance : DÉPLOYÉ (temps 1 et 2, 24/10/2026) ; émission réelle bloquée (coordonnées et conditions de paiement
   à confirmer ; facturation électronique : documentation provisoire) ; réception technique validée (24/10/2026).
-- Module Absences et notes de frais : TEMPS 1 FAIT (24/10/2026, migration seule, commit c981468 sur main) ; écrans NON
-  publiés (temps 2 en attente de l'accord de l'utilisateur) — voir la section « Module Absences ». Relances automatiques : non activées.
+- Module Absences et notes de frais : DÉPLOYÉ (temps 1 c981468 et temps 2 373e7a0 sur main, 24/10/2026), contrôles en
+  production terminés (2e passage compris) — voir la section « Module Absences ». Relances automatiques : non activées.
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
 - RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (24/10/2026) : module RH et correctif 20261026100000.
@@ -471,7 +471,19 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   projets et temps nomment leurs colonnes, il ne lit pas les factures) ; temps 2 = écrans, après « Supabase Preview » vert
   et 20261027100000 dans migrations_appliquees(). Chaque temps sur accord explicite de l'utilisateur.
 
-## Module Absences et notes de frais (migration 20261028100000) — TEMPS 1 FAIT, écrans non publiés
+## Module Absences et notes de frais (migration 20261028100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
+- TEMPS 2 FAIT (accord de l'utilisateur, 24/10/2026) : commit 373e7a0 sur main (parent c981468 ; contenu = branche testée,
+  0 migration, 0 secret). Vercel vert, Supabase Preview vert, toujours 11 migrations. Parcours en ligne
+  `parcours_absences_en_ligne.mjs` 59/59 (soldes à renseigner, confirmation à 0, droits du manager, refus
+  d'auto-validation, décompte unique, confidentialité des justificatifs, requêtes falsifiées, alerte des temps saisis) ;
+  2 dépôts abandonnés laissés VOLONTAIREMENT entre les passages (dossier de fiche jetable supprimée f628adf8-…,
+  fichiers 07e92463-….pdf et 423bfdb9-….pdf, 133 octets, déposés à 22:48 UTC, aucune note) ; 2e passage 62 min plus
+  tard : 5/5 (listés par la base, supprimés par le bouton admin, dossier vide). Pendant l'attente, le parcours RH
+  donnait 49/50 à cause de ces 2 fichiers (son contrôle « aucun reste » compte tout l'espace justificatifs) ; après le
+  2e passage : 50/50. Non-régression en ligne : tests_verrouillage 353/353, Utilisateurs 45/45, Commercial 57/57,
+  Finance 53/53, stockage réel 29/29. `instantane_complet.py` : 19/19 identiques à la photo d'avant le temps 2 ;
+  soldes réels inchangés (25 j « repris », RTT 0 « a_renseigner ») ; 0 reste (1 compte sgi@gmx.fr, 0 fiche jetable,
+  0 congé, 0 note, 0 compteur, 0 fichier dans les 3 espaces, 0 dépôt abandonné).
 - TEMPS 1 FAIT (accord de l'utilisateur, 24/10/2026) : commit c981468 sur main (parent 4af2157) = migration SEULE,
   créée depuis main (pas de fusion de la branche) ; vérifié avant l'envoi : 1 fichier ajouté, empreinte md5
   bd2b87c5d2d55811b31d02e40c23fa7e = version testée, aucun écran, aucune ancienne migration, aucun secret ; rejouée en local.
