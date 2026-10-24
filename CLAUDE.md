@@ -324,10 +324,11 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   (manager : équipe directe ; admin : les autres ; renvoi et réouverture motivés ; jamais ses propres temps).
   Une saisie refusée est conservée à l'écran (React vide sinon les champs après chaque envoi) — LIMITE : les
   formulaires Utilisateurs et Commercial existants n'ont pas encore ce comportement.
-- LIMITE (défaut existant, non modifié sans accord) : `temps.date_saisie` a pour défaut `current_date`, en heure
-  UNIVERSELLE ; entre 20 h et minuit (Martinique), une écriture SANS date est refusée comme « future ».
-  L'application envoie toujours la date de Martinique. Ajustement possible (à approuver) : défaut
-  `(now() at time zone 'America/Martinique')::date`.
+- Date de saisie par défaut (approuvé le 24/10/2026) : la migration remplace le défaut `current_date` (heure
+  universelle) de `temps.date_saisie` par `(now() at time zone 'America/Martinique')::date` ; aucune date
+  existante modifiée ; assertion dans la migration. Testé à horloge simulée (`test_date_martinique.sh`) :
+  24/10 20 h 30, 31/12 22 h 30 et 01/01 0 h 30 en Martinique — ligne sans date datée du jour en Martinique,
+  vraie date future refusée (application et tableau de bord), dates existantes inchangées (21/21).
 - Tests locaux (24/10/2026, base alignée sur les 13 tables réelles) : `rejouer.sh tests_rh.sql` puis
   `select count(*) filter (where ok), count(*) from rhe.resultats` : 153/153 ; `tests_concurrence_rh.sh` 5/5
   (créations, dérogations et CORRECTIONS simultanées ; preuve sans verrou : 14 h, 26 h et 14 h passeraient) ;

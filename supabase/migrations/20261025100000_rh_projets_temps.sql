@@ -47,6 +47,10 @@ alter table public.temps
   add column if not exists historique jsonb not null default '[]'::jsonb;
 alter table public.collaborateurs
   add column if not exists date_sortie date;            -- distincte de la révocation du compte
+-- Date de saisie par défaut : la date du jour EN MARTINIQUE (et non en heure universelle, qui passe au
+-- lendemain dès 20 h en Martinique). Approuvé par l'utilisateur le 24/10/2026. Ne change que la valeur par
+-- défaut des FUTURES lignes : aucune date déjà enregistrée n'est modifiée.
+alter table public.temps alter column date_saisie set default ((now() at time zone 'America/Martinique')::date);
 
 -- 3. Temps existants : aucune information inventée ---------------------------------------------------------------
 -- Auteur de la saisie et validation antérieures : inconnus, laissés vides. Un seul événement documente la
@@ -732,6 +736,7 @@ declare
   v_aujourdhui date := (now() at time zone 'America/Martinique')::date;
   v_avant text;
   v_apres text;
+  v_avant_date date;
 begin
   -- Fonctions appelables avec un jeton : toujours exactement les 4 fonctions d'identité ; aucune pour le visiteur.
   select string_agg(p.proname, ', ' order by p.proname) into v_liste
@@ -780,6 +785,13 @@ begin
      and (coalesce(qual, '') || ' ' || coalesce(with_check, '')) !~ '(est_admin|mon_role|mon_collaborateur_id|acces_actif)\(\)';
   if v_liste is not null then
     raise exception 'RH : règles sans contrôle de session active : %', v_liste;
+  end if;
+  -- Date de saisie par défaut : heure de Martinique.
+  select pg_get_expr(d.adbin, d.adrelid) into v_liste
+    from pg_attrdef d join pg_attribute a on a.attrelid = d.adrelid and a.attnum = d.adnum
+   where d.adrelid = 'public.temps'::regclass and a.attname = 'date_saisie';
+  if v_liste is null or v_liste not ilike '%America/Martinique%' then
+    raise exception 'RH : date de saisie par défaut incorrecte (%)', coalesce(v_liste, 'aucune');
   end if;
   -- Déclencheurs posés.
   select count(*) into v_nb from pg_trigger
@@ -847,6 +859,11 @@ begin
       raise exception 'AUTOTEST: plus de 24 h accepté';
     exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
 
+    -- Ligne sans date explicite (tableau de bord) : date du jour en Martinique, jamais refusée comme « future ».
+    insert into public.temps (collaborateur_id, projet_id, heures) values (v_b, v_projet, 1) returning date_saisie into v_avant_date;
+    if v_avant_date is distinct from v_aujourdhui then
+      raise exception 'AUTOTEST: date par défaut % au lieu de % (Martinique)', v_avant_date, v_aujourdhui;
+    end if;
     -- Historique : jamais écrit directement ; validation par l'admin (temps d'autrui) ; réouverture tracée.
     begin
       update public.temps set historique = '[]'::jsonb where id = v_t1;
