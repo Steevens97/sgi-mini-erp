@@ -248,15 +248,19 @@ export function FormulaireNouvelleFiche({ monCompteDejaRattache }: { monCompteDe
           <input name="date_entree" type="date" className={`${champ} mt-1 w-full`} />
         </label>
         <label className={libelle}>
-          Taux horaire (€)
+          Taux horaire (€) *
           <input
             name="taux_horaire"
             type="number"
             min="0"
             step="0.01"
-            defaultValue="0"
+            required
+            placeholder="taux confirmé"
             className={`${champ} mt-1 w-full`}
           />
+          <span className="mt-1 block text-xs font-normal text-slate-500">
+            Obligatoire. Aucun taux n&apos;est proposé : saisissez le taux confirmé (0 seulement si c&apos;est le vrai taux).
+          </span>
         </label>
       </div>
       <label className="mt-3 flex items-center gap-2 text-sm">

@@ -128,7 +128,10 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   temps.facture_id SET NULL ; temps.projet_id et temps.collaborateur_id CASCADE (supprimer un projet ou une
   fiche efface ses temps !) ; factures.client_id RESTRICT ; collaborateurs.manager_id SET NULL.
   Fonction du déclencheur de auth.users : `creer_profil_a_inscription()` (on conflict do nothing).
-  Le socle simulé reprend tout cela exactement (relances, conges, notes_de_frais, profiles : pas encore relevés).
+  Le socle simulé reprend tout cela exactement. Dernières tables relevées (`diagnostic_tables_rh.sql`) :
+  conges.collaborateur_id et notes_de_frais.collaborateur_id CASCADE, conges.valide_par SET NULL,
+  profiles.collaborateur_id SET NULL, profiles.id → auth.users CASCADE, relances.facture_id CASCADE ;
+  conges.nb_jours numeric(5,2), notes_de_frais.montant numeric(10,2). Les 13 tables sont alignées.
 - Compatibilité de l'écran Utilisateurs ACTUEL avec la migration seule : `JUSQUA=20261023130000 rejouer.sh
   tests_compat_utilisateurs.sql` puis sans JUSQUA → 17/17 dans les deux cas, résultats identiques
   (la migration ne touche ni `collaborateurs` ni `profiles`). L'écran actuel crée des fiches mais n'en
@@ -275,7 +278,76 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   et un collaborateur, et se reconnecte en collaborateur.
 
 - Module Commercial : DÉPLOYÉ (23/10/2026), émission réelle bloquée (coordonnées et assurances à fournir) — voir la section dédiée.
-- Module RH : plan sur la branche `preparation-rh` (docs/plan-rh.md), 5 questions en attente ; rien commencé.
+- Module RH : migration 20261025100000 APPLIQUÉE (temps 1, 24/10/2026) ; écrans préparés sur la branche
+  `preparation-rh-main`, NON PUBLIÉS (temps 2 en attente d'accord) — voir la section « Module RH ». Fiche réelle de l'utilisateur : attend
+  ses informations et son taux confirmé.
+
+## Module RH (migration 20261025100000) — MIGRATION APPLIQUÉE (temps 1), ÉCRANS NON PUBLIÉS
+- TEMPS 1 FAIT (accord de l'utilisateur, 24/10/2026) : commit 312b7e1 sur main (remplace 402a4ef ; migration
+  seule, date par défaut en Martinique incluse ; code du site inchangé). Supabase Preview vert ; 8 migrations ;
+  colonnes, défaut, vue et paramètres présents ; `verifier_temps_existants.py` 10/10 (anciennes colonnes
+  identiques, nouveaux champs vides + 1 événement) ; `tests_verrouillage.py` (mode RH) 204/204 ;
+  `ecran_utilisateurs.mjs` en ligne 45/45 ; `instantane_complet.py` identique ; 0 résidu ; site : ancien écran
+  RH, /rh/temps introuvable (écrans non publiés), Commercial en place.
+- TEMPS 2 (écrans) : commit local sur la branche `deploiement-rh` (contenu = preparation-rh-main), à pousser
+  en avance rapide sur main APRÈS accord explicite de l'utilisateur.
+- Décisions de l'utilisateur (23/10/2026, ne plus les redemander) : D1 projets sans devis créés par l'admin,
+  projets `en_cours` visibles de tous (nom du client seulement) ; D2 chacun saisit ses temps, l'admin peut
+  saisir pour autrui (auteur ≠ collaborateur, tracés), réouverture d'un temps validé = admin + motif, trace de
+  la validation précédente ; D3 responsable hiérarchique (manager_id) valide son équipe, admin valide les autres,
+  PERSONNE ne valide ses propres temps ; temps de l'admin seul : restent « soumis », attestation de l'intéressé
+  = information distincte, facturabilité décidée au module Finance ; D4 pas de 0,25 h, fenêtre J-31 (au-delà :
+  admin + motif), jamais de date future, > 12 h/jour = dérogation admin motivée, > 24 h/jour = refus absolu
+  (paramètres de gestion, pas le droit du travail) ; D5 valide_par/valide_le/date_sortie ; régularisation après
+  départ pour les journées antérieures ; date de sortie ≠ révocation du compte.
+- Colonnes ajoutées (approuvées) : temps.saisi_par, saisi_par_nom, saisi_le, valide_par, valide_par_nom,
+  valide_le, motif_derogation, historique (jsonb, ajout seul) ; collaborateurs.date_sortie. Identifiants de
+  COMPTE sans clé étrangère + nom recopié : la révocation d'un compte n'efface ni les temps ni leur historique.
+- Temps existants : auteur et validation laissés VIDES (inconnus) ; un événement « anterieur_au_module_rh »
+  documente leur provenance. Rien d'inventé.
+- Écriture des temps : UNIQUEMENT par les fonctions de service (clé secrète) `rh_enregistrer_temps`,
+  `rh_supprimer_temps`, `rh_changer_statut_temps` (soumettre, retirer, renvoyer, valider, rouvrir, attester),
+  appelées par les actions serveur après vérification ; elles posent un contexte d'auteur local à la transaction
+  (sgi.rh_auteur/action/motif), invisible des jetons. Les jetons ne font que LIRE (temps : les siens ;
+  admin/manager : tous). Le déclencheur `temps_controle` impose toutes les règles quel que soit le chemin
+  (tableau de bord compris) : historique jamais écrit directement, statut seulement via l'application,
+  cumul verrouillé par fiche (saisies simultanées prouvées), temps facturé figé, suppression seulement d'un
+  brouillon jamais validé.
+- Protections (déclencheurs, aucune clé étrangère modifiée) : fiche non supprimable si temps, congés, notes de
+  frais, congé validé, compte rattaché ou équipe ; projet non supprimable si temps ou issu d'un devis (sauf essais,
+  clé secrète) ; client non supprimable si lié ; AUCUNE facture supprimable (règle à garder au module Finance).
+  Pas son propre manager, pas de boucle, manager sorti refusé, taux ≥ 0, date de sortie ≥ entrée et ≥ dernier temps.
+- Projets : un projet lié à un devis naît seulement de l'acceptation (automatisme Commercial réutilisé, aucun
+  second mécanisme) ; devis et client d'un tel projet figés ; manager : statut seulement ; vue
+  `rh_projets_ouverts` (id, nom, statut, client_nom) pour la saisie.
+- Nettoyage des essais RH : `supprimer_essais_rh()` (temps sur projets d'ESSAI), à appeler AVANT
+  `supprimer_essais_commercial()`.
+- Écran Utilisateurs (sur la branche) : taux obligatoire, ni prérempli ni remplacé par 0.
+- Écrans (src/app/(protege)/rh) : accueil RH ; Collaborateurs (liste sans taux ; création/modification admin,
+  manager choisi parmi les éligibles — ni soi, ni ses subordonnés, ni une personne sortie ; taux lu avec la clé
+  secrète uniquement sur l'écran de modification admin) ; Projets (admin : création sans devis, nom/client des
+  projets manuels ; MANAGER : statut seulement, la base l'impose ; collaborateur : vue des projets ouverts) ;
+  Mes temps (sa fiche seulement, projets ouverts, dates bornées, pas de 0,25 h, alerte > 12 h avant envoi,
+  admin : « Saisir pour » + motif de dérogation ; « Saisi par » distinct du propriétaire) ; Validation
+  (manager : équipe directe ; admin : les autres ; renvoi et réouverture motivés ; jamais ses propres temps).
+  Une saisie refusée est conservée à l'écran (React vide sinon les champs après chaque envoi) — LIMITE : les
+  formulaires Utilisateurs et Commercial existants n'ont pas encore ce comportement.
+- Date de saisie par défaut (approuvé le 24/10/2026) : la migration remplace le défaut `current_date` (heure
+  universelle) de `temps.date_saisie` par `(now() at time zone 'America/Martinique')::date` ; aucune date
+  existante modifiée ; assertion dans la migration. Testé à horloge simulée (`test_date_martinique.sh`) :
+  24/10 20 h 30, 31/12 22 h 30 et 01/01 0 h 30 en Martinique — ligne sans date datée du jour en Martinique,
+  vraie date future refusée (application et tableau de bord), dates existantes inchangées (21/21).
+- Tests locaux (24/10/2026, base alignée sur les 13 tables réelles) : `rejouer.sh tests_rh.sql` puis
+  `select count(*) filter (where ok), count(*) from rhe.resultats` : 153/153 ; `tests_concurrence_rh.sh` 5/5
+  (créations, dérogations et CORRECTIONS simultanées ; preuve sans verrou : 14 h, 26 h et 14 h passeraient) ;
+  `tests_rh_api.py` 28/28 ; `test_temps_existants.sh` 8/8 (anciennes colonnes identiques, nouveaux champs vides
+  + 1 événement) ; navigateur `navigateur_rh.mjs` 49/49 (admin, collaboratrice, manager, manager hors équipe ;
+  taux absent des pages reçues) ; autotest de la migration :
+  6 sabotages sur 8 détectés par l'autotest, les 2 autres arrêtés par une seconde protection ;
+  non-régression : Commercial 135/135, 17/17, 30/30, PDF 14/14, passage d'année, compatibilité Utilisateurs
+  17/17 avec et sans la migration RH, navigateur Commercial 26/26 et 4/4, taux obligatoire 7/7.
+  Production : `verifier_temps_existants.py avant|apres <fichier>` (lecture seule) autour du temps 1.
+  `tests_verrouillage.py` détecte le module RH (projets et temps hors des modules fermés).
 
 ## Tests locaux dans le conteneur cloud
 - Base d'essai PostgreSQL 16 : `/var/tmp/pg-essai` (port 5499), démarrage :

@@ -542,10 +542,23 @@ select essai.refus('devis réel émis : suppression refusée même avec la clé 
   $q$delete from public.devis where not essai and statut <> 'brouillon'$q$);
 reset role;
 -- Un projet d'essai sur lequel du temps réel a été saisi : le nettoyage refuse tout.
-insert into public.projets (id, nom, devis_id) select 'eeeeeeee-0000-0000-0000-0000000000e1', '[ESSAI] Projet témoin', id
-  from public.devis where essai and not exists (select 1 from public.projets p where p.devis_id = devis.id) limit 1;
-insert into public.temps (id, collaborateur_id, projet_id, heures)
-  values ('eeeeeeee-0000-0000-0000-0000000000e2', '22222222-2222-2222-2222-222222222221', 'eeeeeeee-0000-0000-0000-0000000000e1', 1);
+-- Projet d'essai obtenu par le vrai chemin (acceptation du devis d'essai émis) : depuis le module RH, un
+-- projet lié à un devis ne peut plus être inséré à la main.
+update public.devis set pdf_statut = 'disponible', pdf_chemin = id || '/' || numero || '.pdf', pdf_empreinte = repeat('c', 64),
+       pdf_taille = 100, pdf_archive_le = now()
+ where essai and statut = 'emis' and not exists (select 1 from public.projets p where p.devis_id = devis.id);
+set role service_role;
+select public.declarer_envoi_devis(id, 'aaaaaaaa-0000-0000-0000-000000000002', now(), 'email', 'x@exemple.invalid'),
+       public.decider_devis(id, 'aaaaaaaa-0000-0000-0000-000000000002', 'accepte')
+  from public.devis where essai and statut = 'emis' and pdf_statut = 'disponible' limit 1;
+reset role;
+select essai.ok('projet d''essai créé par l''acceptation (automatisme Commercial, réutilisé par le RH)',
+  (select count(*) >= 1 from public.projets p join public.devis d on d.id = p.devis_id where d.essai));
+update public.projets set id = 'eeeeeeee-0000-0000-0000-0000000000e1'
+ where id = (select p.id from public.projets p join public.devis d on d.id = p.devis_id where d.essai limit 1);
+insert into public.temps (id, collaborateur_id, projet_id, heures, date_saisie)
+  values ('eeeeeeee-0000-0000-0000-0000000000e2', '22222222-2222-2222-2222-222222222221', 'eeeeeeee-0000-0000-0000-0000000000e1', 1,
+          (now() at time zone 'America/Martinique')::date);
 set role service_role;
 select essai.refus('nettoyage refusé si du temps est saisi sur un projet d''essai', $q$select public.supprimer_essais_commercial()$q$);
 reset role;

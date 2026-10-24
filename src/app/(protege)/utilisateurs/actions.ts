@@ -234,11 +234,19 @@ export async function creerFiche(_e: EtatAction, donnees: FormData): Promise<Eta
   const texte = (cle: string) => String(donnees.get(cle) ?? "").trim() || null;
   const nom = texte("nom");
   const tauxSaisi = texte("taux_horaire");
-  const taux = tauxSaisi === null ? 0 : Number(tauxSaisi.replace(",", "."));
   const rattacher = donnees.get("rattacher_a_mon_compte") === "on";
 
   if (!nom) return erreur("Le nom est obligatoire.");
-  if (!Number.isFinite(taux) || taux < 0) return erreur("Le taux horaire doit être un nombre positif ou 0.");
+  // Taux obligatoire : jamais de valeur attribuée à la place de l'utilisateur (un champ vide n'est pas 0).
+  if (tauxSaisi === null) {
+    return erreur("Le taux horaire est obligatoire : saisissez le taux confirmé (0 seulement si c'est le vrai taux).");
+  }
+  // Colonne collaborateurs.taux_horaire : numeric(10,2), donc au plus 2 décimales et moins de 100 000 000.
+  if (!/^[0-9]+([.,][0-9]{1,2})?$/.test(tauxSaisi)) {
+    return erreur("Le taux horaire doit être un nombre positif ou 0, avec au plus 2 décimales (ex. 85 ou 85,50).");
+  }
+  const taux = Number(tauxSaisi.replace(",", "."));
+  if (taux >= 1e8) return erreur("Le taux horaire saisi est trop élevé.");
   if (rattacher && moi.collaborateurId) {
     return erreur("Votre compte est déjà rattaché à une fiche : détachez-le d'abord.");
   }
