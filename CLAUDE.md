@@ -278,11 +278,19 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   et un collaborateur, et se reconnecte en collaborateur.
 
 - Module Commercial : DÉPLOYÉ (23/10/2026), émission réelle bloquée (coordonnées et assurances à fournir) — voir la section dédiée.
-- Module RH : migration 20261025100000 et écrans PRÉPARÉS et testés sur la branche `preparation-rh-main`,
-  NON DÉPLOYÉS (voir la section « Module RH » ci-dessous). Fiche réelle de l'utilisateur : attend
+- Module RH : migration 20261025100000 APPLIQUÉE (temps 1, 24/10/2026) ; écrans préparés sur la branche
+  `preparation-rh-main`, NON PUBLIÉS (temps 2 en attente d'accord) — voir la section « Module RH ». Fiche réelle de l'utilisateur : attend
   ses informations et son taux confirmé.
 
-## Module RH (migration 20261025100000) — PRÉPARÉ, NON DÉPLOYÉ
+## Module RH (migration 20261025100000) — MIGRATION APPLIQUÉE (temps 1), ÉCRANS NON PUBLIÉS
+- TEMPS 1 FAIT (accord de l'utilisateur, 24/10/2026) : commit 312b7e1 sur main (remplace 402a4ef ; migration
+  seule, date par défaut en Martinique incluse ; code du site inchangé). Supabase Preview vert ; 8 migrations ;
+  colonnes, défaut, vue et paramètres présents ; `verifier_temps_existants.py` 10/10 (anciennes colonnes
+  identiques, nouveaux champs vides + 1 événement) ; `tests_verrouillage.py` (mode RH) 204/204 ;
+  `ecran_utilisateurs.mjs` en ligne 45/45 ; `instantane_complet.py` identique ; 0 résidu ; site : ancien écran
+  RH, /rh/temps introuvable (écrans non publiés), Commercial en place.
+- TEMPS 2 (écrans) : commit local sur la branche `deploiement-rh` (contenu = preparation-rh-main), à pousser
+  en avance rapide sur main APRÈS accord explicite de l'utilisateur.
 - Décisions de l'utilisateur (23/10/2026, ne plus les redemander) : D1 projets sans devis créés par l'admin,
   projets `en_cours` visibles de tous (nom du client seulement) ; D2 chacun saisit ses temps, l'admin peut
   saisir pour autrui (auteur ≠ collaborateur, tracés), réouverture d'un temps validé = admin + motif, trace de
