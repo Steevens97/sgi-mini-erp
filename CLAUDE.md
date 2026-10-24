@@ -282,7 +282,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   (migration 20261026100000, commit 2a566fa sur main) — voir la section « Module RH ».
   Fiche réelle de l'utilisateur : attend ses informations et son taux confirmé.
 - Module Finance : DÉPLOYÉ (temps 1 et 2, 24/10/2026) ; émission réelle bloquée (coordonnées et conditions de paiement
-  à confirmer ; facturation électronique : documentation provisoire). Absences et relances : pas commencés (accord requis).
+  à confirmer ; facturation électronique : documentation provisoire) ; réception technique validée (24/10/2026).
+  Absences et notes de frais : en préparation (plan à approuver). Relances automatiques : non activées.
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
 - RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (24/10/2026) : module RH et correctif 20261026100000.
@@ -370,6 +371,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   `tests_verrouillage.py` détecte le module RH (projets et temps hors des modules fermés).
 
 ## Module Finance (migration 20261027100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
+- RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (24/10/2026) : Finance version 1, limites documentées, émission réelle
+  toujours bloquée.
 - TEMPS 2 FAIT (accord de l'utilisateur, 24/10/2026) : commit f996517 sur main (écrans ; parent 8cf0852 ; aucune
   migration touchée ; aucun secret ; identique aux fichiers testés). Vercel vert ; Supabase Preview « skipped » (aucune
   migration) ; toujours 10 migrations. Parcours en ligne `parcours_finance_en_ligne.mjs` 53/53 (facture d'ESSAI
