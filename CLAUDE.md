@@ -283,6 +283,7 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Fiche réelle de l'utilisateur : attend ses informations et son taux confirmé. Finance : pas commencé (accord requis).
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
+- RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (24/10/2026) : module RH et correctif 20261026100000.
 - TEMPS 1 FAIT (accord de l'utilisateur, 24/10/2026) : commit 312b7e1 sur main (remplace 402a4ef ; migration
   seule, date par défaut en Martinique incluse ; code du site inchangé). Supabase Preview vert ; 8 migrations ;
   colonnes, défaut, vue et paramètres présents ; `verifier_temps_existants.py` 10/10 (anciennes colonnes
@@ -307,7 +308,7 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   « … porte une équipe (manager). … »), fiches conservées ; parcours RH en ligne 50/50 (48 contrôles d'origine
   + contrôle de suppression resserré au message exact + nouveau contrôle « fiche refusée toujours présente ») ;
   tests_verrouillage 204/204 ; instantane_complet identique ; verifier_temps_existants 10/10 ; 0 résidu.
-  Branche `correctif-rh-suppression` : tests et CLAUDE.md (non publiés sur main, à joindre au prochain envoi accordé).
+  Tests et CLAUDE.md publiés ensuite sur main (documentation et scripts de test seulement, accord de l'utilisateur).
 - Décisions de l'utilisateur (23/10/2026, ne plus les redemander) : D1 projets sans devis créés par l'admin,
   projets `en_cours` visibles de tous (nom du client seulement) ; D2 chacun saisit ses temps, l'admin peut
   saisir pour autrui (auteur ≠ collaborateur, tracés), réouverture d'un temps validé = admin + motif, trace de
