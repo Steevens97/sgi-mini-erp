@@ -283,8 +283,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Fiche réelle de l'utilisateur : attend ses informations et son taux confirmé.
 - Module Finance : DÉPLOYÉ (temps 1 et 2, 24/10/2026) ; émission réelle bloquée (coordonnées et conditions de paiement
   à confirmer ; facturation électronique : documentation provisoire) ; réception technique validée (24/10/2026).
-- Module Absences et notes de frais : PRÉPARÉ et testé en local sur la branche `preparation-absences`, NON DÉPLOYÉ
-  (attend l'accord de l'utilisateur pour le temps 1) — voir la section « Module Absences ». Relances automatiques : non activées.
+- Module Absences et notes de frais : TEMPS 1 FAIT (24/10/2026, migration seule, commit c981468 sur main) ; écrans NON
+  publiés (temps 2 en attente de l'accord de l'utilisateur) — voir la section « Module Absences ». Relances automatiques : non activées.
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
 - RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (24/10/2026) : module RH et correctif 20261026100000.
@@ -471,7 +471,19 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   projets et temps nomment leurs colonnes, il ne lit pas les factures) ; temps 2 = écrans, après « Supabase Preview » vert
   et 20261027100000 dans migrations_appliquees(). Chaque temps sur accord explicite de l'utilisateur.
 
-## Module Absences et notes de frais (migration 20261028100000) — PRÉPARÉ, NON DÉPLOYÉ (branche preparation-absences)
+## Module Absences et notes de frais (migration 20261028100000) — TEMPS 1 FAIT, écrans non publiés
+- TEMPS 1 FAIT (accord de l'utilisateur, 24/10/2026) : commit c981468 sur main (parent 4af2157) = migration SEULE,
+  créée depuis main (pas de fusion de la branche) ; vérifié avant l'envoi : 1 fichier ajouté, empreinte md5
+  bd2b87c5d2d55811b31d02e40c23fa7e = version testée, aucun écran, aucune ancienne migration, aucun secret ; rejouée en local.
+  Supabase Preview vert, Vercel vert ; 11 migrations dans migrations_appliquees() (autotest passé en production).
+  Essais du stockage RÉEL (`essais_stockage_absences.mjs`) 29/29 : dépôt et liens directs refusés aux jetons, lien signé
+  rejoué (avec et sans x-upsert) refusé, écrasement d'un fichier rattaché refusé, taille/type/dossier différents refusés
+  par la base, 10 Mo et type texte refusés par le stockage, lien temporaire expiré refusé. Site en ligne (ancienne
+  version) : `tests_verrouillage.py` 353/353 (mode Absences), écran Utilisateurs 45/45, parcours RH 50/50, Commercial 57/57,
+  Finance 53/53. `instantane_complet.py` : 19/19 identiques (13 tables en colonnes d'origine, comptes, espaces, fichiers) ;
+  changements prévus constatés seulement dans les nouveaux éléments : fiches existantes à 25 j « repris », RTT 0
+  « a_renseigner », bucket justificatifs limité (10 Mo, PDF/JPEG/PNG), défaut de solde_conges à 0, droits et règles.
+  0 reste : un seul compte (sgi@gmx.fr), 0 fiche jetable, 0 congé, 0 note, 0 compteur, 0 fichier dans les 3 espaces.
 - Arbitrages de l'utilisateur (24/10/2026, ne plus les redemander) : nombre de jours SAISI (demi-journées, pas de 0,5,
   > 0, dans la limite de la période ; jour unique après-midi → midi refusé), aucun calendrier des jours fériés (estimation
   lundi–vendredi affichée, jamais enregistrée) ; congés payés sur solde_conges, RTT sur solde_rtt (aucune acquisition
