@@ -28,7 +28,9 @@ const EMETTEUR_DEMO = { raison_sociale: "[DÉMO] SG Ingénierie", forme_juridiqu
   code_postal: "97200", ville: "Fort-de-France", siret: "00000000000000", immatriculation: "[DÉMO] immatriculation", tva_intracom: "[DÉMO]",
   validite_jours: "30", telephone: "", email: "", conditions_paiement: "", obligation_assurance: "non_requise" };
 
-const nav = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome", proxy: { server: process.env.HTTPS_PROXY } });
+// Proxy du conteneur pour le site en ligne ; aucun pour une répétition sur la pile locale (127.0.0.1).
+const nav = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+  ...(process.env.HTTPS_PROXY && !B.startsWith("http://127.0.0.1") ? { proxy: { server: process.env.HTTPS_PROXY } } : {}) });
 async function connexion(email) {
   const page = await (await nav.newContext({ ignoreHTTPSErrors: true })).newPage();
   page.on("dialog", (d) => d.accept());

@@ -8,6 +8,8 @@ export default async function PageRH() {
   const entrees = [
     { chemin: "/rh/temps", titre: "Mes temps", texte: "Saisir, corriger et soumettre ses temps." },
     ...(valideur ? [{ chemin: "/rh/validation", titre: "Validation", texte: "Valider ou renvoyer les temps soumis." }] : []),
+    { chemin: "/rh/notes-de-frais", titre: "Notes de frais",
+      texte: valideur ? "Déposer ses notes ; décider de celles de son équipe" + (moi.role === "admin" ? " ; remboursements déclarés." : ".") : "Déposer ses notes avec leur justificatif." },
     { chemin: "/rh/projets", titre: "Projets", texte: valideur ? "Projets, statuts, création (admin)." : "Projets ouverts à la saisie." },
     { chemin: "/rh/collaborateurs", titre: "Collaborateurs", texte: moi.role === "admin" ? "Fiches, managers, taux (admin)." : "Fiches visibles avec vos droits." },
   ];

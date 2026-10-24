@@ -30,6 +30,8 @@ CACHEES = {"commercial_prospects": ["email", "telephone", "adresse", "client_id"
            "commercial_devis": ["instantane_emission", "pdf_chemin", "criteres_tva", "envoi_destinataire", "emis_par"]}
 DEPLOYE = False  # renseigné au démarrage d'après migrations_appliquees()
 RH = False       # module RH (migration 20261025100000) : projets et temps sortent des modules fermés
+ABSENCES = False  # module Absences (migration 20261028100000) : congés et notes lisibles par soi, l'équipe directe du
+                  # manager et l'admin ; soldes seulement par la vue absences_soldes ; bucket justificatifs sans accès direct
 FINANCE = False  # module Finance (migration 20261027100000) : factures sans aucun droit pour les jetons ;
                  # projets et temps lisibles seulement par colonnes nommées (tarifs, taux et montants facturés exclus)
 COLONNES = {"projets": "id,nom,client_id,devis_id,statut,created_at,mode_facturation",
@@ -117,6 +119,8 @@ def voit_quelque_chose(j):
             total += len(lignes(appel("GET", f"/rest/v1/{v}?select=id", j)[1]))
     if RH:
         total += len(lignes(appel("GET", "/rest/v1/rh_projets_ouverts?select=id", j)[1]))
+    if ABSENCES:
+        total += len(lignes(appel("GET", "/rest/v1/absences_soldes?select=id", j)[1]))
     return total
 
 
@@ -149,15 +153,18 @@ def bucket_devis_ferme(j, qui):
 
 
 def main():
-    global DEPLOYE, RH, FINANCE, FERMEES
+    global DEPLOYE, RH, FINANCE, ABSENCES, FERMEES
     s, versions = secret("POST", "/rest/v1/rpc/migrations_appliquees", {})
     DEPLOYE = "20261024100000" in (versions or [])
     RH = "20261025100000" in (versions or [])
     FINANCE = "20261027100000" in (versions or [])
+    ABSENCES = "20261028100000" in (versions or [])
     if RH:
         FERMEES = [t for t in FERMEES if t not in ("projets", "temps")]
+    if ABSENCES:
+        FERMEES = [t for t in FERMEES if t not in ("conges", "notes_de_frais")]
     print("Module Commercial déployé :", "oui" if DEPLOYE else "non", "| module RH :", "oui" if RH else "non",
-          "| module Finance :", "oui" if FINANCE else "non")
+          "| module Finance :", "oui" if FINANCE else "non", "| module Absences :", "oui" if ABSENCES else "non")
     avant = compter_tout()
     print("Lignes des 11 tables (clé secrète) :", avant)
 
@@ -195,9 +202,9 @@ def main():
     print("\n== 2. Collaborateur (Léa) : tables fermées" + (" (sauf ses propres temps)" if RH else ""))
     for t in ONZE:
         s, r = appel("GET", f"/rest/v1/{t}?select={sel(t)}", j["collab"])
-        if RH and t == "temps":
-            siens = len(lignes(secret("GET", f"/rest/v1/temps?select=id&collaborateur_id=eq.{LEA}")[1]))
-            verifier("temps : uniquement les siens", len(lignes(r)) == siens and all(x["collaborateur_id"] == LEA for x in lignes(r)),
+        if (RH and t == "temps") or (ABSENCES and t in ("conges", "notes_de_frais")):
+            siens = len(lignes(secret("GET", f"/rest/v1/{t}?select=id&collaborateur_id=eq.{LEA}")[1]))
+            verifier(f"{t} : uniquement les siens", len(lignes(r)) == siens and all(x["collaborateur_id"] == LEA for x in lignes(r)),
                      f"{len(lignes(r))}/{siens} ligne(s), réel : {avant[t]}")
         else:
             verifier(f"{t} : aucune ligne lue", lignes(r) == [], f"HTTP {s}, réel : {avant[t]} ligne(s)")
@@ -272,6 +279,13 @@ def main():
         for t in COMMERCIAL + ["clients"] + (["projets", "temps"] if RH else []):
             s, r = appel("GET", f"/rest/v1/{t}?select={sel(t)}", j["manager"])
             verifier(f"{t} : lisible en entier", s == 200 and len(lignes(r)) == avant[t], f"{len(lignes(r))}/{avant[t]}")
+        if ABSENCES:
+            equipe = [BRUNO] + [x["id"] for x in lignes(secret("GET", f"/rest/v1/collaborateurs?select=id&manager_id=eq.{BRUNO}")[1])]
+            for t in ("conges", "notes_de_frais"):
+                attendu = len(lignes(secret("GET", f"/rest/v1/{t}?select=id&collaborateur_id=in.({','.join(equipe)})")[1]))
+                s, r = appel("GET", f"/rest/v1/{t}?select=id,collaborateur_id", j["manager"])
+                verifier(f"{t} : lui et son équipe directe seulement", s == 200 and len(lignes(r)) == attendu
+                         and all(x["collaborateur_id"] in equipe for x in lignes(r)), f"{len(lignes(r))}/{attendu}, réel : {avant[t]}")
         for t in FERMEES:
             s, r = appel("GET", f"/rest/v1/{t}?select=*", j["manager"])
             verifier(f"{t} (module fermé) : aucune ligne lue", lignes(r) == [], f"HTTP {s}")
@@ -323,6 +337,41 @@ def main():
         s, r = secret("GET", "/rest/v1/factures?select=id,numero")
         verifier("côté serveur (clé secrète, après exigerAdmin) : factures lisibles", s == 200, f"HTTP {s}, {len(lignes(r))} facture(s)")
 
+    if ABSENCES:
+        print("\n== 4c. Absences : soldes confidentiels, aucune écriture avec un jeton")
+        for qui in ("collab", "manager", "admin"):
+            for chemin, libelle in (("collaborateurs?select=solde_conges", "solde de congés payés"),
+                                    ("collaborateurs?select=id,solde_rtt", "solde RTT"),
+                                    ("collaborateurs?select=id,historique_soldes", "historique des soldes"),
+                                    ("collaborateurs?select=id&solde_conges=gt.0", "filtre sur le solde"),
+                                    ("collaborateurs?select=id&order=solde_conges", "tri sur le solde")):
+                s, r = appel("GET", f"/rest/v1/{chemin}", j[qui])
+                verifier(f"{qui} : {libelle} illisible dans les fiches", s in REFUS or s == 400, f"HTTP {s}")
+            for t, corps in (("conges", {"collaborateur_id": LEA, "date_debut": "2030-01-02", "date_fin": "2030-01-02"}),
+                             ("notes_de_frais", {"collaborateur_id": LEA, "montant": 1})):
+                s, r = appel("POST", f"/rest/v1/{t}", j[qui], corps)
+                verifier(f"{qui} : création directe dans {t} refusée", s in REFUS, f"HTTP {s}")
+                s, r = appel("PATCH", f"/rest/v1/{t}?id=not.is.null", j[qui], {"statut": "validee"}, entetes={"Prefer": "return=representation"})
+                verifier(f"{qui} : décision directe dans {t} refusée", s in REFUS and lignes(r) == [], f"HTTP {s}")
+            s, r = appel("PATCH", f"/rest/v1/collaborateurs?id=eq.{LEA}", j[qui], {"solde_conges": 99}, entetes={"Prefer": "return=minimal"})
+            verifier(f"{qui} : solde non modifiable directement", s in REFUS, f"HTTP {s}")
+            for f in ("abs_demander_conge", "abs_decider_conge", "abs_ajuster_solde", "abs_creer_note", "abs_declarer_remboursement",
+                      "abs_fichiers_orphelins", "supprimer_essais_absences"):
+                s, r = appel("POST", f"/rest/v1/rpc/{f}", j[qui], {})
+                verifier(f"{qui} : fonction {f} refusée", s >= 400, f"HTTP {s}")
+        s, r = appel("GET", "/rest/v1/absences_soldes?select=id", j["collab"])
+        verifier("collaboratrice : vue des soldes = sa seule fiche", [x["id"] for x in lignes(r)] == [LEA], f"{len(lignes(r))} ligne(s)")
+        equipe = sorted([BRUNO] + [x["id"] for x in lignes(secret("GET", f"/rest/v1/collaborateurs?select=id&manager_id=eq.{BRUNO}")[1])])
+        s, r = appel("GET", "/rest/v1/absences_soldes?select=id", j["manager"])
+        verifier("manager : vue des soldes = lui et son équipe directe", sorted(x["id"] for x in lignes(r)) == equipe, f"{len(lignes(r))}/{len(equipe)}")
+        toutes = len(lignes(secret("GET", "/rest/v1/collaborateurs?select=id")[1]))
+        s, r = appel("GET", "/rest/v1/absences_soldes?select=id,solde_conges,solde_rtt,droits_rtt_renseignes", j["admin"])
+        verifier("admin : vue globale des soldes", len(lignes(r)) == toutes, f"{len(lignes(r))}/{toutes}")
+        s, r = appel("GET", "/rest/v1/absences_soldes?select=id", None)
+        verifier("visiteur : vue des soldes refusée", s in REFUS, f"HTTP {s}")
+        s, r = appel("GET", "/rest/v1/absences_soldes?select=id", j["admin_provisoire"])
+        verifier("admin provisoire : vue des soldes vide", lignes(r) == [], f"HTTP {s}")
+
     print("\n== 5. Admin actif : accès complet" + (" (factures : écrans serveur seulement)" if FINANCE else ""))
     for t in ONZE:
         s, r = appel("GET", f"/rest/v1/{t}?select={sel(t)}", j["admin"])
@@ -341,14 +390,25 @@ def main():
     nom_fichier = f"jetable-{T}.txt"
     s, r = appel("POST", f"/storage/v1/object/justificatifs/{nom_fichier}", j["collab"], brut=b"essai", entetes={"Content-Type": "text/plain"})
     verifier("bucket : dépôt par un collaborateur refusé", s >= 400, f"HTTP {s}")
-    s, r = appel("POST", f"/storage/v1/object/justificatifs/{nom_fichier}", j["admin"], brut=b"essai", entetes={"Content-Type": "text/plain"})
-    verifier("bucket : dépôt par l'admin accepté", s == 200, f"HTTP {s}")
-    s, r = appel("POST", "/storage/v1/object/list/justificatifs", j["collab"], {"prefix": ""})
-    verifier("bucket : le collaborateur ne voit pas le fichier", lignes(r) == [], f"{len(lignes(r))} fichier(s)")
-    s, r = appel("DELETE", "/storage/v1/object/justificatifs", j["collab"], {"prefixes": [nom_fichier]})
-    verifier("bucket : suppression par un collaborateur sans effet", lignes(r) == [], f"HTTP {s}")
-    s, r = appel("DELETE", "/storage/v1/object/justificatifs", j["admin"], {"prefixes": [nom_fichier]})
-    verifier("bucket : suppression par l'admin", s == 200 and len(lignes(r)) == 1, f"HTTP {s}")
+    if ABSENCES:
+        # Module Absences : plus AUCUN accès direct au bucket, même pour l'admin (dépôt par lien signé du serveur).
+        for qui in ("admin", "manager"):
+            s, r = appel("POST", f"/storage/v1/object/justificatifs/{nom_fichier}", j[qui], brut=b"%PDF-1.4 essai",
+                         entetes={"Content-Type": "application/pdf"})
+            verifier(f"bucket justificatifs : dépôt direct par {qui} refusé (serveur seulement)", s >= 400, f"HTTP {s}")
+            s, r = appel("POST", "/storage/v1/object/list/justificatifs", j[qui], {"prefix": ""})
+            verifier(f"bucket justificatifs : {qui} ne liste rien directement", lignes(r) == [], f"HTTP {s}")
+        s, r = secret("POST", "/storage/v1/object/list/justificatifs", {"prefix": ""})
+        verifier("bucket justificatifs : aucun fichier déposé par ces essais", not any(o["name"].startswith("jetable-") for o in lignes(r)))
+    else:
+        s, r = appel("POST", f"/storage/v1/object/justificatifs/{nom_fichier}", j["admin"], brut=b"essai", entetes={"Content-Type": "text/plain"})
+        verifier("bucket : dépôt par l'admin accepté", s == 200, f"HTTP {s}")
+        s, r = appel("POST", "/storage/v1/object/list/justificatifs", j["collab"], {"prefix": ""})
+        verifier("bucket : le collaborateur ne voit pas le fichier", lignes(r) == [], f"{len(lignes(r))} fichier(s)")
+        s, r = appel("DELETE", "/storage/v1/object/justificatifs", j["collab"], {"prefixes": [nom_fichier]})
+        verifier("bucket : suppression par un collaborateur sans effet", lignes(r) == [], f"HTTP {s}")
+        s, r = appel("DELETE", "/storage/v1/object/justificatifs", j["admin"], {"prefixes": [nom_fichier]})
+        verifier("bucket : suppression par l'admin", s == 200 and len(lignes(r)) == 1, f"HTTP {s}")
     if DEPLOYE:
         bucket_devis_ferme(j["admin"], "admin")
 

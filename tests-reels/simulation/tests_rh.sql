@@ -408,16 +408,43 @@ select rhe.refus('fiche avec temps : suppression refusée', $q$delete from publi
 insert into public.collaborateurs (id, nom, taux_horaire) values ('22222222-2222-2222-2222-2222222222c1', 'Conge', 0),
   ('22222222-2222-2222-2222-2222222222c2', 'Frais', 0), ('22222222-2222-2222-2222-2222222222c3', 'Valideur', 0),
   ('22222222-2222-2222-2222-2222222222c4', 'Libre', 0), ('22222222-2222-2222-2222-2222222222c5', 'Chef', 0);
-insert into public.conges (collaborateur_id, date_debut, date_fin) values ('22222222-2222-2222-2222-2222222222c1', '2026-11-02', '2026-11-03');
-insert into public.notes_de_frais (collaborateur_id, montant) values ('22222222-2222-2222-2222-2222222222c2', 12.5);
-insert into public.conges (collaborateur_id, date_debut, date_fin, statut, valide_par) values ('22222222-2222-2222-2222-2222222222c4', '2026-11-02', '2026-11-03', 'validee', '22222222-2222-2222-2222-2222222222c3');
+-- Pièces posées directement (données « anciennes ») : ce test porte sur la protection des fiches, pas sur les règles
+-- du module Absences. Si ce module est présent (migration 20261028100000), ses contrôles sont suspendus le temps de
+-- ces insertions, dans cette base d'essai locale seulement, et les lignes respectent ses contraintes.
+do $$
+begin
+  if to_regclass('public.absences_soldes') is not null then
+    alter table public.conges disable trigger conges_controle;
+    alter table public.notes_de_frais disable trigger notes_de_frais_controle;
+    insert into public.notes_de_frais (collaborateur_id, montant, categorie, objet, justificatif_url, justificatif_type,
+      justificatif_taille, justificatif_empreinte)
+    values ('22222222-2222-2222-2222-2222222222c2', 12.5, 'repas', 'Essai RH', 'essai-rh.pdf', 'application/pdf', 1, repeat('a', 64));
+  else
+    insert into public.notes_de_frais (collaborateur_id, montant) values ('22222222-2222-2222-2222-2222222222c2', 12.5);
+  end if;
+  insert into public.conges (collaborateur_id, date_debut, date_fin) values ('22222222-2222-2222-2222-2222222222c1', '2026-11-02', '2026-11-03');
+  insert into public.conges (collaborateur_id, date_debut, date_fin, statut, valide_par) values ('22222222-2222-2222-2222-2222222222c4', '2026-11-02', '2026-11-03', 'validee', '22222222-2222-2222-2222-2222222222c3');
+  if to_regclass('public.absences_soldes') is not null then
+    alter table public.conges enable trigger conges_controle;
+    alter table public.notes_de_frais enable trigger notes_de_frais_controle;
+  end if;
+end $$;
 select rhe.refus('fiche avec congés : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c1'$q$, 'la fiche  Conge porte des congés.');
 select rhe.refus('fiche avec notes de frais : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c2'$q$, 'la fiche  Frais porte des notes de frais.');
 select rhe.refus('fiche ayant validé un congé : suppression refusée (trace du valideur)', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c3'$q$, 'la fiche  Valideur porte des congés qu''elle a validés.');
 select rhe.refus('fiche rattachée à un compte : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-222222222224'$q$, 'porte un compte rattaché.');
 update public.collaborateurs set manager_id = '22222222-2222-2222-2222-2222222222c5' where id = '22222222-2222-2222-2222-2222222222c2';
 select rhe.refus('fiche qui manage quelqu''un : suppression refusée', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c5'$q$, 'la fiche  Chef porte une équipe (manager).');
-delete from public.conges where collaborateur_id = '22222222-2222-2222-2222-2222222222c4';
+do $$
+begin
+  if to_regclass('public.absences_soldes') is not null then
+    alter table public.conges disable trigger conges_controle;
+  end if;
+  delete from public.conges where collaborateur_id = '22222222-2222-2222-2222-2222222222c4';
+  if to_regclass('public.absences_soldes') is not null then
+    alter table public.conges enable trigger conges_controle;
+  end if;
+end $$;
 select rhe.passe('contrôle positif : fiche sans aucune pièce ni lien supprimable', $q$delete from public.collaborateurs where id = '22222222-2222-2222-2222-2222222222c4'$q$);
 select rhe.ok('congés, notes de frais et validations toujours présents', (select count(*) = 1 from public.conges) and (select count(*) = 1 from public.notes_de_frais));
 select rhe.refus('projet avec temps : suppression refusée', $q$delete from public.projets where id = rhe.id('projet1')$q$, 'temps enregistrés');
