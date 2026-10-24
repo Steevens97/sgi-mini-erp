@@ -278,8 +278,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   et un collaborateur, et se reconnecte en collaborateur.
 
 - Module Commercial : DÉPLOYÉ (23/10/2026), émission réelle bloquée (coordonnées et assurances à fournir) — voir la section dédiée.
-- Module RH : DÉPLOYÉ (temps 1 et 2, 24/10/2026) ; correctif du message de suppression de fiche PRÉPARÉ
-  (migration 20261026100000, branche `correctif-rh-suppression`), NON DÉPLOYÉ — voir la section « Module RH ».
+- Module RH : DÉPLOYÉ (temps 1 et 2, 24/10/2026) ; correctif du message de suppression de fiche DÉPLOYÉ
+  (migration 20261026100000, commit 2a566fa sur main) — voir la section « Module RH ».
   Fiche réelle de l'utilisateur : attend ses informations et son taux confirmé. Finance : pas commencé (accord requis).
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
@@ -299,10 +299,15 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   technique (« malformed array literal ») : `tableau || 'texte'` dans collaborateurs_avant_suppression().
   Aucun écran ne supprime de fiche (seuls le tableau de bord et la clé secrète sont concernés). Mes tests
   passaient à tort (recherche de « des temps » dans le message) : tests_rh.sql et le parcours en ligne vérifient
-  désormais le message EXACT. Correctif PRÉPARÉ, NON DÉPLOYÉ : migration 20261026100000 (array_append, autotest des
-  messages exacts ; 4 sabotages sur 4 arrêtés, rien appliqué) ; tests_rh 153/153 ; non-régression Commercial
-  135/135, 17/17, 30/30, numérotation piégée, RH API 28/28, concurrence RH, temps existants, compatibilité 17/17.
-  Déploiement = commit de la migration seule sur main, APRÈS accord de l'utilisateur (aucun code du site modifié).
+  désormais le message EXACT. Correctif DÉPLOYÉ (accord de l'utilisateur, 24/10/2026) : commit 2a566fa
+  sur main = migration 20261026100000 SEULE (array_append ; autotest des messages exacts ; 4 sabotages sur 4 arrêtés).
+  À la vérification du diff, la ligne `revoke` sur la fonction de déclencheur a été RETIRÉE (choix de l'utilisateur :
+  aucun changement de droits) ; contrôlé en local : tables, colonnes, droits, règles, déclencheurs identiques.
+  Après application (9 migrations) : message exact en production (« … porte des temps, un compte rattaché. … » et
+  « … porte une équipe (manager). … »), fiches conservées ; parcours RH en ligne 50/50 (48 contrôles d'origine
+  + contrôle de suppression resserré au message exact + nouveau contrôle « fiche refusée toujours présente ») ;
+  tests_verrouillage 204/204 ; instantane_complet identique ; verifier_temps_existants 10/10 ; 0 résidu.
+  Branche `correctif-rh-suppression` : tests et CLAUDE.md (non publiés sur main, à joindre au prochain envoi accordé).
 - Décisions de l'utilisateur (23/10/2026, ne plus les redemander) : D1 projets sans devis créés par l'admin,
   projets `en_cours` visibles de tous (nom du client seulement) ; D2 chacun saisit ses temps, l'admin peut
   saisir pour autrui (auteur ≠ collaborateur, tracés), réouverture d'un temps validé = admin + motif, trace de
