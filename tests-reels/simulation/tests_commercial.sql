@@ -556,8 +556,9 @@ select essai.ok('projet d''essai créé par l''acceptation (automatisme Commerci
   (select count(*) >= 1 from public.projets p join public.devis d on d.id = p.devis_id where d.essai));
 update public.projets set id = 'eeeeeeee-0000-0000-0000-0000000000e1'
  where id = (select p.id from public.projets p join public.devis d on d.id = p.devis_id where d.essai limit 1);
-insert into public.temps (id, collaborateur_id, projet_id, heures)
-  values ('eeeeeeee-0000-0000-0000-0000000000e2', '22222222-2222-2222-2222-222222222221', 'eeeeeeee-0000-0000-0000-0000000000e1', 1);
+insert into public.temps (id, collaborateur_id, projet_id, heures, date_saisie)
+  values ('eeeeeeee-0000-0000-0000-0000000000e2', '22222222-2222-2222-2222-222222222221', 'eeeeeeee-0000-0000-0000-0000000000e1', 1,
+          (now() at time zone 'America/Martinique')::date);
 set role service_role;
 select essai.refus('nettoyage refusé si du temps est saisi sur un projet d''essai', $q$select public.supprimer_essais_commercial()$q$);
 reset role;

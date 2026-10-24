@@ -237,11 +237,41 @@ select rhe.refus('une seule ligne de 24,5 h refusée', $q$select public.rh_enreg
 reset role;
 select rhe.ok('cumul du jour de Léa : exactement 24 h', (select sum(heures) = 24 from public.temps where collaborateur_id = '22222222-2222-2222-2222-222222222221' and date_saisie = rhe.aujourdhui()));
 select rhe.refus('tableau de bord / clé secrète directe : 24 h dépassées refusées aussi',
-  $q$insert into public.temps (collaborateur_id, projet_id, heures) values ('22222222-2222-2222-2222-222222222221', rhe.id('projet1'), 0.25)$q$, 'plafond absolu');
+  $q$insert into public.temps (collaborateur_id, projet_id, heures, date_saisie) values ('22222222-2222-2222-2222-222222222221', rhe.id('projet1'), 0.25, rhe.aujourdhui())$q$, 'plafond absolu');
 select rhe.refus('tableau de bord : création directe « validée » refusée',
   $q$insert into public.temps (collaborateur_id, projet_id, heures, statut, date_saisie) values ('22222222-2222-2222-2222-222222222223', rhe.id('projet1'), 1, 'valide', rhe.aujourdhui() - 2)$q$, 'brouillon');
 select rhe.refus('tableau de bord : faux historique fourni à la création refusé',
   $q$insert into public.temps (collaborateur_id, projet_id, heures, date_saisie, historique) values ('22222222-2222-2222-2222-222222222223', rhe.id('projet1'), 1, rhe.aujourdhui() - 2, '[{"action":"validation"}]')$q$, 'Historique');
+
+-- Brouillon créé par l'admin POUR Léa : Léa le reprend (correction, soumission, suppression d'un autre).
+set role service_role;
+select rhe.passe('admin : brouillon pour Léa (J-2, 2 h)', $q$insert into rhe.ids select 'pourlea', public.rh_enregistrer_temps('11111111-1111-1111-1111-111111111111', null, '22222222-2222-2222-2222-222222222221', rhe.id('projet2'), rhe.aujourdhui() - 2, 2, 'saisi par l''admin', null)$q$);
+select rhe.passe('admin : second brouillon pour Léa (J-2, 1 h)', $q$insert into rhe.ids select 'pourlea2', public.rh_enregistrer_temps('11111111-1111-1111-1111-111111111111', null, '22222222-2222-2222-2222-222222222221', rhe.id('projet2'), rhe.aujourdhui() - 2, 1, null, null)$q$);
+select rhe.passe('Léa corrige le brouillon saisi par l''admin', $q$select public.rh_enregistrer_temps('aaaaaaaa-0000-0000-0000-000000000022', rhe.id('pourlea'), '22222222-2222-2222-2222-222222222221', rhe.id('projet2'), rhe.aujourdhui() - 2, 3, 'repris par Léa', null)$q$);
+reset role;
+select rhe.ok('reprise : propriétaire Léa, auteur de la saisie toujours l''admin, correction tracée au nom de Léa',
+  (select collaborateur_id = '22222222-2222-2222-2222-222222222221' and saisi_par = '11111111-1111-1111-1111-111111111111'
+          and historique -> -1 ->> 'action' = 'correction' and historique -> -1 ->> 'auteur' = 'aaaaaaaa-0000-0000-0000-000000000022'
+     from public.temps where id = rhe.id('pourlea')));
+set role service_role;
+select rhe.passe('Léa supprime le second brouillon de l''admin (jamais validé)', $q$select public.rh_supprimer_temps('aaaaaaaa-0000-0000-0000-000000000022', rhe.id('pourlea2'))$q$);
+select rhe.refus('correction en changeant de collaborateur : refus explicite', $q$select public.rh_enregistrer_temps('11111111-1111-1111-1111-111111111111', rhe.id('pourlea'), '22222222-2222-2222-2222-222222222223', rhe.id('projet2'), rhe.aujourdhui() - 2, 3, null, null)$q$, 'ne change pas');
+select rhe.refus('déplacer ce brouillon vers une journée déjà à 24 h : refusé (plafond recalculé sur la nouvelle date : 27 h > 24 h)', $q$select public.rh_enregistrer_temps('aaaaaaaa-0000-0000-0000-000000000022', rhe.id('pourlea'), '22222222-2222-2222-2222-222222222221', rhe.id('projet2'), rhe.aujourdhui(), 3, null, null)$q$, 'plafond absolu');
+select rhe.refus('admin : déplacer ce brouillon vers une journée à 24 h, même avec motif : refusé', $q$select public.rh_enregistrer_temps('11111111-1111-1111-1111-111111111111', rhe.id('pourlea'), '22222222-2222-2222-2222-222222222221', rhe.id('projet2'), rhe.aujourdhui(), 3, null, 'motif')$q$, 'plafond absolu');
+select rhe.passe('Léa soumet le brouillon repris', $q$select public.rh_changer_statut_temps('aaaaaaaa-0000-0000-0000-000000000022', array[rhe.id('pourlea')], 'soumettre', null)$q$);
+reset role;
+-- Manager et projets : statut seulement.
+set role authenticated;
+select rhe.qui(:M, 'bbbbbbbb-0000-0000-0000-000000000021');
+select rhe.refus('manager : changer le client d''un projet refusé', $q$update public.projets set client_id = null where id = rhe.id('projet1')$q$, 'Seul l''administrateur');
+select rhe.ok('manager : supprimer un projet sans effet (admin seulement)', rhe.compte($q$select 1 from public.projets where id = rhe.id('interne')$q$) = 1
+  and (select count(*) = 0 from (select 1) x where false));
+reset role;
+set role authenticated;
+select rhe.qui(:M, 'bbbbbbbb-0000-0000-0000-000000000021');
+delete from public.projets where id = rhe.id('interne');
+reset role;
+select rhe.ok('… le projet existe toujours après la tentative de suppression du manager', (select count(*) = 1 from public.projets where id = rhe.id('interne')));
 
 -- ===================== Validation =====================
 set role service_role;

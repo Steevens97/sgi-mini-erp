@@ -42,3 +42,20 @@ else
   ok "message du refus : plafond absolu" "$(cat /tmp/rh_b1 /tmp/rh_b2 | grep -c 'plafond absolu')" "1"
 fi
 rm -f /tmp/rh_a1 /tmp/rh_a2 /tmp/rh_b1 /tmp/rh_b2
+
+echo "Cas C : deux CORRECTIONS simultanées (1 h → 7 h sur deux lignes du même jour : cumul 14 h > 12 h)"
+J8=$(q -c "select (now() at time zone 'America/Martinique')::date - 8")
+T1=$(q -c "set role service_role; select public.rh_enregistrer_temps('$CHLOE_COMPTE', null, '$CHLOE', '$PROJET', '$J8', 1, 'c1', null)" | tail -1)
+T2=$(q -c "set role service_role; select public.rh_enregistrer_temps('$CHLOE_COMPTE', null, '$CHLOE', '$PROJET', '$J8', 1, 'c2', null)" | tail -1)
+corriger() { q -c "set role service_role; begin; select public.rh_enregistrer_temps('$CHLOE_COMPTE', '$1', '$CHLOE', '$PROJET', '$J8', 7, 'corrigé', null); select pg_sleep($2); commit;" 2>&1; }
+corriger $T1 2 > /tmp/rh_c1 &
+sleep 0.5
+corriger $T2 0 > /tmp/rh_c2 &
+wait
+T=$(q -c "select sum(heures) from public.temps where collaborateur_id = '$CHLOE' and date_saisie = '$J8'")
+if [ "$ATTENDU_SANS_VERROU" = 1 ]; then
+  ok "SANS verrou : les deux corrections passent (14 h)" "$T" "14.00"
+else
+  ok "une seule correction retenue (cumul 8 h), l'autre refusée" "$T" "8.00"
+fi
+rm -f /tmp/rh_c1 /tmp/rh_c2

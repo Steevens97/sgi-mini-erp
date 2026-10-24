@@ -565,6 +565,10 @@ begin
             nullif(btrim(p_motif_derogation), ''))
     returning id into v_id;
   else
+    -- Le collaborateur concerné ne change jamais : une demande contraire est refusée explicitement.
+    if exists (select 1 from public.temps where id = p_temps_id and collaborateur_id is distinct from p_collaborateur_id) then
+      raise exception 'Le collaborateur d''un temps ne change pas : créez un nouveau temps pour l''autre personne.';
+    end if;
     update public.temps
        set projet_id = p_projet_id, date_saisie = p_date, heures = p_heures,
            commentaire = nullif(btrim(p_commentaire), ''), motif_derogation = nullif(btrim(p_motif_derogation), '')

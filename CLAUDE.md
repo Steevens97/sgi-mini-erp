@@ -278,8 +278,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   et un collaborateur, et se reconnecte en collaborateur.
 
 - Module Commercial : DÉPLOYÉ (23/10/2026), émission réelle bloquée (coordonnées et assurances à fournir) — voir la section dédiée.
-- Module RH : migration 20261025100000 PRÉPARÉE et testée sur la branche `preparation-rh-main`, NON DÉPLOYÉE
-  (voir la section « Module RH » ci-dessous). Écrans RH : étape suivante. Fiche réelle de l'utilisateur : attend
+- Module RH : migration 20261025100000 et écrans PRÉPARÉS et testés sur la branche `preparation-rh-main`,
+  NON DÉPLOYÉS (voir la section « Module RH » ci-dessous). Fiche réelle de l'utilisateur : attend
   ses informations et son taux confirmé.
 
 ## Module RH (migration 20261025100000) — PRÉPARÉ, NON DÉPLOYÉ
@@ -315,12 +315,29 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
 - Nettoyage des essais RH : `supprimer_essais_rh()` (temps sur projets d'ESSAI), à appeler AVANT
   `supprimer_essais_commercial()`.
 - Écran Utilisateurs (sur la branche) : taux obligatoire, ni prérempli ni remplacé par 0.
-- Tests locaux (23/10/2026, base alignée sur les 13 tables réelles) : `rejouer.sh tests_rh.sql` puis
-  `select count(*) filter (where ok), count(*) from rhe.resultats` : 141/141 ; `tests_concurrence_rh.sh` 4/4
-  (et preuve sans verrou : 14 h et 26 h passeraient) ; `tests_rh_api.py` 28/28 ; autotest de la migration :
+- Écrans (src/app/(protege)/rh) : accueil RH ; Collaborateurs (liste sans taux ; création/modification admin,
+  manager choisi parmi les éligibles — ni soi, ni ses subordonnés, ni une personne sortie ; taux lu avec la clé
+  secrète uniquement sur l'écran de modification admin) ; Projets (admin : création sans devis, nom/client des
+  projets manuels ; MANAGER : statut seulement, la base l'impose ; collaborateur : vue des projets ouverts) ;
+  Mes temps (sa fiche seulement, projets ouverts, dates bornées, pas de 0,25 h, alerte > 12 h avant envoi,
+  admin : « Saisir pour » + motif de dérogation ; « Saisi par » distinct du propriétaire) ; Validation
+  (manager : équipe directe ; admin : les autres ; renvoi et réouverture motivés ; jamais ses propres temps).
+  Une saisie refusée est conservée à l'écran (React vide sinon les champs après chaque envoi) — LIMITE : les
+  formulaires Utilisateurs et Commercial existants n'ont pas encore ce comportement.
+- LIMITE (défaut existant, non modifié sans accord) : `temps.date_saisie` a pour défaut `current_date`, en heure
+  UNIVERSELLE ; entre 20 h et minuit (Martinique), une écriture SANS date est refusée comme « future ».
+  L'application envoie toujours la date de Martinique. Ajustement possible (à approuver) : défaut
+  `(now() at time zone 'America/Martinique')::date`.
+- Tests locaux (24/10/2026, base alignée sur les 13 tables réelles) : `rejouer.sh tests_rh.sql` puis
+  `select count(*) filter (where ok), count(*) from rhe.resultats` : 153/153 ; `tests_concurrence_rh.sh` 5/5
+  (créations, dérogations et CORRECTIONS simultanées ; preuve sans verrou : 14 h, 26 h et 14 h passeraient) ;
+  `tests_rh_api.py` 28/28 ; `test_temps_existants.sh` 8/8 (anciennes colonnes identiques, nouveaux champs vides
+  + 1 événement) ; navigateur `navigateur_rh.mjs` 49/49 (admin, collaboratrice, manager, manager hors équipe ;
+  taux absent des pages reçues) ; autotest de la migration :
   6 sabotages sur 8 détectés par l'autotest, les 2 autres arrêtés par une seconde protection ;
   non-régression : Commercial 135/135, 17/17, 30/30, PDF 14/14, passage d'année, compatibilité Utilisateurs
   17/17 avec et sans la migration RH, navigateur Commercial 26/26 et 4/4, taux obligatoire 7/7.
+  Production : `verifier_temps_existants.py avant|apres <fichier>` (lecture seule) autour du temps 1.
   `tests_verrouillage.py` détecte le module RH (projets et temps hors des modules fermés).
 
 ## Tests locaux dans le conteneur cloud
