@@ -654,6 +654,21 @@ livraison reçus durablement) — voir « Relances automatiques ».
   envoyer et pour recevoir ; CHANGER DE COMPTE = changer la référence en même temps que la clé et le secret de signature.
   Écran Finance → Relances : référence affichée, événements en attente (âge, alerte), « Classer sans suite » (motif) ; fiche
   relance : compte fournisseur.
+  PROCÉDURE DE CHANGEMENT DE COMPTE FOURNISSEUR (décision du 25/10/2026 : AUCUNE empreinte de clé ; la référence fait foi) :
+  1) Vercel → interrupteur RELANCES_ACTIVES vidé (plus aucune réservation ni tentative ; rapprochement des événements continu) ;
+  2) écran Finance → Relances : noter les relances « en cours » / « réservée » / « à vérifier » de l'ancien compte ;
+  3) nouveau compte : nouvelle clé (RESEND_API_KEY), nouveau webhook (RESEND_WEBHOOK_SECRET) et NOUVELLE référence
+     (RESEND_COMPTE_REFERENCE, jamais une référence déjà utilisée, jamais une clé) — les trois changés ENSEMBLE ;
+     désactiver le webhook de l'ancien compte ;
+  4) redéployer, puis rétablir RELANCES_ACTIVES=1.
+  Effets (imposés par la base) : une relance déjà tentée avec l'ancienne référence n'est JAMAIS reprise avec la nouvelle —
+  relances_prendre répond « à vérifier » (« Compte fournisseur différent »), aucun appel ; l'administrateur consulte le tableau
+  de bord de l'ANCIEN compte et enregistre un constat (« email accepté » avec son identifiant, ou « aucun envoi ») ; un
+  événement signé pour la nouvelle référence n'est jamais rapproché d'une relance de l'ancienne (alerte « Compte fournisseur
+  différent »). Une réservation jamais tentée part avec le nouveau compte (aucun email n'existe chez l'ancien).
+  Limite assumée : changer la clé SANS changer la référence n'est pas détecté (reprise possible avec un compte dont la
+  protection anti-doublon ignore la clé → risque de double envoi) : d'où l'obligation de l'étape 3. Événements tardifs de
+  l'ancien compte après le changement du secret de signature : refusés (401), donc à constater manuellement.
 - Site : src/lib/relances.ts (textes validés, demande figée, corps envoyé, classement des réponses, lecture des événements ;
   EXPEDITEUR_RELANCES et SIGNATURE_RELANCES VIDES → relances réelles bloquées ; essais : expéditeur onboarding@resend.dev,
   destinataire = RELANCES_ADRESSE_ESSAI, vide = aucun envoi d'essai) ; src/lib/relances/serveur.ts (envoi : appel direct à
