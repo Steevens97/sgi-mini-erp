@@ -14,6 +14,8 @@ Avancer étape par étape et s'arrêter à la fin de chaque étape.
 
 ## Schéma — 13 tables, NE PAS MODIFIER
 Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans demander.
+14e table APPROUVÉE le 25/10/2026 (branche et base locale seulement, NON déployée) : `relances_evenements` (événements de
+livraison reçus durablement) — voir « Relances automatiques ».
 
 - clients (id, nom, email_contact, telephone, adresse, created_at)
 - prospects (id, nom, societe, email, telephone, source, statut ∈ contacte/devis_envoye/gagne/perdu, client_id→clients, created_at)
@@ -604,8 +606,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   par constat admin) ; colonnes jour_relance, rang, essai, destinataire, objet, requete_fournisseur (demande figée, SANS
   secret), requete_empreinte (SHA-256 de requete_fournisseur::text), pdf_empreinte, cle_idempotence (« sgi-relance-<id> »),
   statut (reservee, en_cours, acceptee, refusee, rejetee, a_verifier, abandonnee), tentatives (≤ 5), premiere/derniere
-  tentative, limite_reprise (première tentative + 20 h, jamais modifiable), compte_fournisseur (empreinte non réversible
-  url + clé), accepte_le, fournisseur_id (unique), livre_le, rebond_le, rebond_motif, erreur, resolu_*, historique (ajout
+  tentative, limite_reprise (première tentative + 20 h, jamais modifiable), compte_fournisseur (RÉFÉRENCE NON SECRÈTE du
+  compte, `^[A-Za-z0-9._-]{3,64}$`, refusée si elle ressemble à un secret), accepte_le, fournisseur_id (unique), livre_le, rebond_le, rebond_motif, erreur, resolu_*, historique (ajout
   seul) ; canal = email. Index : une par facture et par jour, un rang une fois (hors abandonnée/refusée), UNE relance non
   résolue par facture (réservée, en cours, à vérifier, refusée ; rejetée tant que non résolue APRÈS le rejet).
 - Règles (relances_situation, même fonction partout : aperçu, simulation, réservation, déclencheur) : facture émise/envoyée,
@@ -615,13 +617,43 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   (= now() ; remplacée le temps de l'autotest et des essais locaux, définition d'origine contrôlée par empreinte).
 - Fonctions (clé secrète seulement) : relances_apercu, relances_reserver, relances_prendre (tentative enregistrée AVANT l'appel ;
   refus si facture réglée, autre compte, limite atteinte, 5 tentatives, hors horaires ; réservation sans tentative > 20 h =
-  abandonnée), relances_resultat (acceptee | temporaire | refus | incertain), relances_evenement_livraison (par étiquette puis
-  identifiant ; doublons ignorés ; anomalies consignées), relances_resoudre (admin, motif ; email_accepte | aucun_envoi |
+  abandonnée), relances_resultat (acceptee | temporaire | refus | incertain ; rapproche ensuite les événements en attente),
+  relances_recevoir_evenement et les fonctions d'événements (voir ci-dessous), relances_resoudre (admin, motif ; email_accepte | aucun_envoi |
   traitee ; jamais pendant une tentative récente), relances_a_reprendre, supprimer_essais_finance (remplacée après contrôle
   d'empreinte : supprime aussi les relances d'essai). relances_declencher() : propriétaire postgres SEULEMENT (ni jetons, ni
   clé secrète), lit `relances_secret_cron` et `relances_url` dans Vault, appel pg_net dynamique ; échoue explicitement sans
   Vault, sans pg_net, sans secret (≥ 32 caractères) ou avec une adresse non conforme. AUCUNE tâche Cron créée.
 - Table relances : aucun droit pour les jetons (même admin) ; règle RLS de défense « relances_lecture_admin ».
+- ÉVÉNEMENTS DE LIVRAISON — 14e table `relances_evenements` (accord du 25/10/2026, remplace le 503 « en attente » de 28 h) :
+  colonnes evenement_id (clé = svix-id), type, fournisseur_id, relance_id (étiquette), compte_fournisseur (référence NON secrète
+  du compte qui a signé), survenu_le, detail (≤ 300, masqué s'il ressemble à un secret), recu_le (posé par la base), statut
+  (en_attente | rapproche | sans_suite), alerte, rapproche_le, relance_rapprochee, classe_par, classe_par_nom, classe_le,
+  motif_classement. Aucun droit pour les jetons (même admin ; règle de défense « relances_evenements_lecture_admin ») ;
+  service_role par les fonctions ; déclencheur relances_evenements_controle (tous les chemins) : insertion seulement par la
+  réception, contenu reçu jamais modifié, en_attente → rapproche (rapprochement) | sans_suite (classement admin), puis figé ;
+  suppression seulement par le nettoyage (rapprochés / sans suite depuis plus de 30 jours ; JAMAIS un événement en attente)
+  ou le nettoyage des essais (événements liés à une relance d'essai).
+  Fonctions (clé secrète) : relances_recevoir_evenement (ENREGISTRE puis rapproche ; même svix-id = « déjà ») ;
+  relances_rapprocher_evenement (jamais appliqué, alerte explicite, si : étiquette et identifiant désignent deux relances
+  différentes — même si l'une n'existe plus — ; la relance porte un autre identifiant ; jamais tentée ; autre compte ; refusée ;
+  abandonnée puis remplacée au même rang) ; relances_appliquer_evenement (AUCUN envoi : constate état, acceptation, livraison,
+  rejet ; « déjà appliqué » si l'evenement_id figure dans l'historique de la relance) ; relances_rapprocher_relance (appelée par
+  l'acceptation, le constat admin et un événement étiqueté) ; relances_rapprocher_tout et relances_purger_evenements (à chaque
+  exécution de /api/relances/executer, MÊME interrupteur coupé ; aucun envoi) ; relances_classer_evenement (admin, motif ≥ 5).
+  Verrou de transaction `relances_verrou_identifiant(fournisseur_id)` pris par la réception, la réponse et le constat AVANT le
+  verrou de la relance (sans lui, un événement reçu pendant l'enregistrement de la réponse restait en attente : prouvé par
+  tests_concurrence_relances, 15/17 sans, 17/17 avec).
+  Route /api/relances/livraison : 200 seulement APRÈS l'enregistrement (rapproché ou en attente) ; 500 si l'enregistrement
+  échoue (base, référence de compte absente) → renvoi par le fournisseur ; 401 sans signature valide.
+  Interruption prolongée (> 20 h) : la reprise est refusée (limite jamais renouvelée) ; un rapprochement tardif (constat admin
+  avec l'identifiant, ou événement étiqueté reçu 30 h après) ne crée AUCUNE tentative et ne modifie pas limite_reprise.
+  Renvoi après nettoyage : événement rapproché puis supprimé → réenregistré et rapproché SANS effet (« déjà appliqué ») ;
+  « sans suite » supprimé → revient EN ATTENTE comme un nouvel événement (même alerte s'il est toujours incohérent ; rapproché
+  normalement s'il correspond désormais à une relance) ; l'admin le reclasse.
+  Référence du compte : variable RESEND_COMPTE_REFERENCE (nom choisi, ex. « resend-sgi-1 », jamais une clé) ; obligatoire pour
+  envoyer et pour recevoir ; CHANGER DE COMPTE = changer la référence en même temps que la clé et le secret de signature.
+  Écran Finance → Relances : référence affichée, événements en attente (âge, alerte), « Classer sans suite » (motif) ; fiche
+  relance : compte fournisseur.
 - Site : src/lib/relances.ts (textes validés, demande figée, corps envoyé, classement des réponses, lecture des événements ;
   EXPEDITEUR_RELANCES et SIGNATURE_RELANCES VIDES → relances réelles bloquées ; essais : expéditeur onboarding@resend.dev,
   destinataire = RELANCES_ADRESSE_ESSAI, vide = aucun envoi d'essai) ; src/lib/relances/serveur.ts (envoi : appel direct à
@@ -630,7 +662,7 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Svix, 5 min) exemptées de session dans proxy.ts ; écran Finance → Relances (état de la configuration sans valeurs,
   simulation sans écriture ni envoi, factures sans PDF / clients sans email à part) et fiche relance (résolution motivée).
   RESEND_URL : essais locaux seulement (imitation) ; ne jamais le renseigner dans Vercel.
-- Tests locaux (25/10/2026) : `rejouer.sh tests_relances.sql` 124/124 (factures d'ESSAI seulement pour les échéances passées ;
+- 1re préparation (avant la 14e table) — tests locaux (25/10/2026) : `rejouer.sh tests_relances.sql` 124/124 (factures d'ESSAI seulement pour les échéances passées ;
   la facture réelle de test garde une échéance future et ne reçoit aucune relance) ; `tests_concurrence_relances.sh` 14/14 (après
   rejouer.sh) ; `test_relances_martinique.sh '<instant UTC>' '<attendu>'` 6 instants × 5/5 (migration appliquée un samedi et
   le 31/12 à 22 h 30) ; `test_sabotages_relances.sh` 19/19 sabotages arrêtés ; `node --experimental-strip-types
@@ -644,18 +676,18 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   avec et sans ; navigateur Commercial 26/26 et réel 4/4, RH 49/49, taux 7/7, Finance 54/54 et 21/21, Absences 76/76 (de jour et le
   soir simulé, avec et sans la migration, après la correction des dates des scripts) ; répétitions locales Utilisateurs 45/45, Commercial 57/57, RH 50/50, Finance
   53/53, Absences 59/59, stockage 29/29.
-- Événement de livraison SANS étiquette arrivé avant l'enregistrement de l'identifiant (corrigé le 25/10/2026, migration encore
-  jamais appliquée) : « en_attente » si une relance tentée depuis moins de 28 h attend son identifiant ; rien n'est écrit ; la
-  route répond 503 ; le fournisseur le renvoie (même svix-id ; renvois immédiat, 5 s, 5 min, 30 min, 2 h, 5 h, 10 h, 10 h) et il
-  est rapproché ; au-delà de 28 h : ignoré (pas de refus sans fin : Resend désactive une adresse qui échoue en continu).
-  Alternative non retenue (demanderait une table) : conserver nous-mêmes les événements non rapprochés.
+- (Abandonné le 25/10/2026, à la demande de l'utilisateur) : réponse 503 « en attente » pendant 28 h sans rien écrire — un
+  renvoi demandé au fournisseur n'est pas une conservation. Remplacé par la 14e table (ci-dessus). Commits 63a2a69, 591a79c et
+  la branche deploiement-relances-t1 (a0aa42c) sont OBSOLÈTES : ne jamais les déployer.
 - Second passage local (25/10/2026, journée) : tests_relances.sql 129/129, essais_relances_locaux.mjs 44/44, sabotages 20/20 ;
   Absences SQL 197/197 et API 95/95 de jour ET le soir (horloge simulée), avec et sans la migration ; navigateur Absences
   76/76 de jour et le soir simulé, avec et sans la migration ; toute la non-régression identique (voir ci-dessus).
 - Limites connues : présence des étiquettes dans les événements du fournisseur non vérifiée (repli par identifiant) ; file
   interne de pg_net (en-têtes) à examiner à l'activation ; quota gratuit de 100 emails/jour non suivi par l'application ;
-  date_envoi d'une acceptation obtenue lors d'une reprise = heure de cette réponse (prudent) ; changement de clé pendant une
-  reprise = « à vérifier » (prudent).
+  date_envoi d'une acceptation obtenue lors d'une reprise = heure de cette réponse (prudent) ; changement de compte pendant une
+  reprise = « à vérifier » (prudent) ; une CLÉ changée SANS changer la référence n'est pas détectée (la référence fait foi :
+  proposition non créée, colonne d'empreinte non réversible de la clé) ; événements en attente : jamais supprimés
+  automatiquement (classement admin) ; instantane_complet.py ne tourne pas sur la pile locale (liste des espaces non imitée).
 - Prochaines étapes (chacune sur accord) : temps 1 = migration seule ; temps 2 = écrans (aucun envoi possible : clés absentes,
   interrupteur coupé) ; préparation (compte Resend, secrets dans Vault et Vercel, adresse de test, signature) ; activation =
   migration distincte (pg_net, pg_cron, tâche toutes les 5 minutes) ; relances réelles seulement avec un domaine vérifié.
