@@ -472,6 +472,11 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   et 20261027100000 dans migrations_appliquees(). Chaque temps sur accord explicite de l'utilisateur.
 
 ## Module Absences et notes de frais (migration 20261028100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
+- RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (25/10/2026). Ne pas relancer les tests terminés.
+- Relances automatiques : diagnostic en LECTURE SEULE seulement (25/10/2026) : aucun envoi d'email dans le code, aucune
+  dépendance d'email, aucune route d'API, aucun vercel.json ni workflow GitHub (donc aucun Cron côté code) ; table relances
+  vide ; pg_cron, pg_net, SMTP, Edge Functions et Cron Vercel à constater dans les tableaux de bord. Aucune implémentation,
+  aucun email, aucune modification de la base, aucun Cron sans accord.
 - TEMPS 2 FAIT (accord de l'utilisateur, 24/10/2026) : commit 373e7a0 sur main (parent c981468 ; contenu = branche testée,
   0 migration, 0 secret). Vercel vert, Supabase Preview vert, toujours 11 migrations. Parcours en ligne
   `parcours_absences_en_ligne.mjs` 59/59 (soldes à renseigner, confirmation à 0, droits du manager, refus
