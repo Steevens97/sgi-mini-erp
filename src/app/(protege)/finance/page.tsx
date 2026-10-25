@@ -18,6 +18,8 @@ export default async function PageFinance() {
         <div className="flex gap-2">
           <Link href="/finance/projets" className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50">
             Tarifs et modes des projets</Link>
+          <Link href="/finance/relances" className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50">
+            Relances</Link>
           <Link href="/finance/nouvelle" className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700">
             Nouvelle facture</Link>
         </div>
