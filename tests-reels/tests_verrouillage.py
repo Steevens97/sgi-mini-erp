@@ -32,6 +32,8 @@ DEPLOYE = False  # renseigné au démarrage d'après migrations_appliquees()
 RH = False       # module RH (migration 20261025100000) : projets et temps sortent des modules fermés
 ABSENCES = False  # module Absences (migration 20261028100000) : congés et notes lisibles par soi, l'équipe directe du
                   # manager et l'admin ; soldes seulement par la vue absences_soldes ; bucket justificatifs sans accès direct
+RELANCES = False  # module Relances (migration 20261029100000) : relances sans aucun droit pour les jetons (même admin) ;
+                  # fonctions de service refusées aux jetons ; déclenchement refusé à tous sauf au propriétaire (postgres)
 FINANCE = False  # module Finance (migration 20261027100000) : factures sans aucun droit pour les jetons ;
                  # projets et temps lisibles seulement par colonnes nommées (tarifs, taux et montants facturés exclus)
 COLONNES = {"projets": "id,nom,client_id,devis_id,statut,created_at,mode_facturation",
@@ -153,18 +155,20 @@ def bucket_devis_ferme(j, qui):
 
 
 def main():
-    global DEPLOYE, RH, FINANCE, ABSENCES, FERMEES
+    global DEPLOYE, RH, FINANCE, ABSENCES, RELANCES, FERMEES
     s, versions = secret("POST", "/rest/v1/rpc/migrations_appliquees", {})
     DEPLOYE = "20261024100000" in (versions or [])
     RH = "20261025100000" in (versions or [])
     FINANCE = "20261027100000" in (versions or [])
     ABSENCES = "20261028100000" in (versions or [])
+    RELANCES = "20261029100000" in (versions or [])
     if RH:
         FERMEES = [t for t in FERMEES if t not in ("projets", "temps")]
     if ABSENCES:
         FERMEES = [t for t in FERMEES if t not in ("conges", "notes_de_frais")]
     print("Module Commercial déployé :", "oui" if DEPLOYE else "non", "| module RH :", "oui" if RH else "non",
-          "| module Finance :", "oui" if FINANCE else "non", "| module Absences :", "oui" if ABSENCES else "non")
+          "| module Finance :", "oui" if FINANCE else "non", "| module Absences :", "oui" if ABSENCES else "non",
+          "| module Relances :", "oui" if RELANCES else "non")
     avant = compter_tout()
     print("Lignes des 11 tables (clé secrète) :", avant)
 
@@ -337,6 +341,24 @@ def main():
         s, r = secret("GET", "/rest/v1/factures?select=id,numero")
         verifier("côté serveur (clé secrète, après exigerAdmin) : factures lisibles", s == 200, f"HTTP {s}, {len(lignes(r))} facture(s)")
 
+    if RELANCES:
+        print("\n== 4d. Relances : aucune lecture ni écriture avec un jeton, fonctions de service et déclenchement refusés")
+        for qui in ("collab", "manager", "admin"):
+            s, r = appel("GET", "/rest/v1/relances?select=id", j[qui])
+            verifier(f"{qui} : lecture des relances refusée", s in REFUS, f"HTTP {s}")
+            s, r = appel("POST", "/rest/v1/relances", j[qui], {"facture_id": None})
+            verifier(f"{qui} : création de relance refusée", s in REFUS, f"HTTP {s}")
+            for f in ("relances_apercu", "relances_reserver", "relances_prendre", "relances_resultat", "relances_resoudre",
+                      "relances_evenement_livraison", "relances_declencher"):
+                s, r = appel("POST", f"/rest/v1/rpc/{f}", j[qui], {})
+                verifier(f"{qui} : fonction {f} refusée", s >= 400, f"HTTP {s}")
+        s, r = appel("GET", "/rest/v1/relances?select=id", None)
+        verifier("visiteur : lecture des relances refusée", s in REFUS, f"HTTP {s}")
+        s, r = secret("POST", "/rest/v1/rpc/relances_declencher", {})
+        verifier("clé secrète : déclenchement refusé (propriétaire seulement)", s >= 400, f"HTTP {s}")
+        s, r = secret("GET", "/rest/v1/relances?select=id")
+        verifier("côté serveur (clé secrète, après exigerAdmin) : relances lisibles", s == 200, f"HTTP {s}, {len(lignes(r))} relance(s)")
+
     if ABSENCES:
         print("\n== 4c. Absences : soldes confidentiels, aucune écriture avec un jeton")
         for qui in ("collab", "manager", "admin"):
@@ -377,6 +399,9 @@ def main():
         s, r = appel("GET", f"/rest/v1/{t}?select={sel(t)}", j["admin"])
         if FINANCE and t == "factures":
             verifier("factures : aucun accès par jeton, même admin (lecture serveur avec la clé secrète)", s in REFUS, f"HTTP {s}")
+            continue
+        if RELANCES and t == "relances":
+            verifier("relances : aucun accès par jeton, même admin (lecture serveur avec la clé secrète)", s in REFUS, f"HTTP {s}")
             continue
         verifier(f"{t} : tout est lisible", len(lignes(r)) == avant[t], f"{len(lignes(r))}/{avant[t]}")
     s, r = appel("POST", "/rest/v1/clients", j["admin"], {"nom": f"Jetable-client-{T}"}, entetes={"Prefer": "return=representation"})
