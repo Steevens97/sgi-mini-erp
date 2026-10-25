@@ -39,6 +39,7 @@ export const LIMITES_FINANCE = [
   "Aucun avoir : une facture émise est conservée telle quelle, aucune erreur ne se corrige par un changement de statut.",
   "Règlement intégral uniquement : les paiements partiels ne sont pas gérés.",
   "Aucun email ni relance automatique, aucun suivi bancaire : l'envoi et le règlement sont seulement déclarés.",
+  "Relances automatiques des factures : préparées mais NON activées (voir Finance → Relances).",
 ];
 
 // Confirmations affichées en haut de la fiche facture après une action (texte fixe, jamais repris de l'adresse).

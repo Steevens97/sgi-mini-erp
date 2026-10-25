@@ -8,6 +8,11 @@ import { INDICATEUR_CHANGEMENT_MDP } from "@/lib/utilisateurs";
 // non connecté vers /connexion (et un utilisateur connecté hors de /connexion),
 // et impose le remplacement d'un mot de passe provisoire.
 export async function proxy(requete: NextRequest) {
+  // Routes des relances (tâche planifiée, événements du fournisseur) : sans session ; chacune vérifie elle-même
+  // son secret partagé ou sa signature, et refuse tout le reste.
+  if (ROUTES_SANS_SESSION.includes(requete.nextUrl.pathname)) {
+    return NextResponse.next();
+  }
   let reponse = NextResponse.next({ request: requete });
 
   const supabase = createServerClient(
@@ -60,6 +65,7 @@ export async function proxy(requete: NextRequest) {
 }
 
 const PAGE_CHANGEMENT_MDP = "/changer-mot-de-passe";
+const ROUTES_SANS_SESSION = ["/api/relances/executer", "/api/relances/livraison"];
 
 // Redirige en conservant les cookies de session éventuellement rafraîchis.
 function rediriger(requete: NextRequest, reponse: NextResponse, chemin: string) {

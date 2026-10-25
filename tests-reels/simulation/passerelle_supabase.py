@@ -58,10 +58,13 @@ def session_pour(uid, session_id=None):
     sql("insert into auth.sessions (id, user_id) values (:'p0', :'p1') on conflict do nothing", session_id, uid)
     u = utilisateur(uid)
     maintenant = int(time.time())
+    # Durée du jeton : 1 h ; PASSERELLE_DUREE_JETON (secondes) seulement pour les essais à horloge simulée EN ARRIÈRE
+    # (PostgREST garde l'horloge réelle : il refuse un jeton émis « dans le futur » ou déjà expiré).
+    duree = int(os.environ.get("PASSERELLE_DUREE_JETON", "3600"))
     jeton = signer({"sub": uid, "role": "authenticated", "aud": "authenticated", "email": u["email"],
                     "session_id": session_id, "app_metadata": u["app_metadata"], "iat": maintenant,
-                    "exp": maintenant + 3600})
-    return {"access_token": jeton, "token_type": "bearer", "expires_in": 3600, "expires_at": maintenant + 3600,
+                    "exp": maintenant + duree})
+    return {"access_token": jeton, "token_type": "bearer", "expires_in": duree, "expires_at": maintenant + duree,
             "refresh_token": session_id, "user": u}
 
 

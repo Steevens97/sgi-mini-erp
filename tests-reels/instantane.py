@@ -1,5 +1,6 @@
-"""Empreinte des données réelles (nombre de lignes + somme de contrôle) des 13 tables et du bucket."""
-import hashlib, json, os, ssl, sys, urllib.request
+"""Empreinte des données réelles (nombre de lignes + somme de contrôle) des 13 tables, de la 14e (relances_evenements,
+si elle existe) et du bucket."""
+import hashlib, json, os, ssl, sys, urllib.error, urllib.request
 U = os.environ["NEXT_PUBLIC_SUPABASE_URL"]; S = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 CTX = ssl.create_default_context(cafile="/root/.ccr/ca-bundle.crt")
 TABLES = ["clients","prospects","devis","devis_lignes","collaborateurs","projets","factures","temps",
@@ -10,6 +11,13 @@ def get(chemin, methode="GET", corps=None):
     with urllib.request.urlopen(req, context=CTX, timeout=20) as r: return json.loads(r.read())
 res = {}
 residus = 0
+try:
+    get("/rest/v1/relances_evenements?select=evenement_id&limit=1")
+    TABLES.append("relances_evenements")
+except urllib.error.HTTPError as e:
+    if e.code != 404:
+        raise
+    res["relances_evenements"] = (0, "absente")
 for t in TABLES:
     lignes = get(f"/rest/v1/{t}?select=*")
     jetables = [l for l in lignes if "exemple.invalid" in json.dumps(l) or "[ESSAI]" in json.dumps(l)]

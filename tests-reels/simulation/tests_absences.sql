@@ -3,6 +3,8 @@
 --         puis : select count(*) filter (where ok), count(*) from abse.resultats;
 -- Les dépôts de justificatifs sont simulés par des lignes storage.objects (le contenu des fichiers est contrôlé par
 -- le serveur, testé à part : tests_justificatifs.mts et le parcours navigateur).
+-- Dates des données de test : TOUJOURS la date de Martinique (abse.j), comme l'application ; jamais current_date (date
+-- UTC, différente entre 20 h et minuit en Martinique).
 \set ON_ERROR_STOP 1
 \pset tuples_only on
 \pset format unaligned
@@ -162,10 +164,10 @@ select abse.ok('collaboratrice : vue des soldes = sa seule fiche',
 select abse.passe('collaboratrice : lectures existantes des fiches (nom, date de sortie) inchangées',
   $q$select nom, prenom, manager_id, date_sortie from public.collaborateurs$q$);
 select abse.refus('collaboratrice : création directe d''un congé refusée',
-  $q$insert into public.conges (collaborateur_id, date_debut, date_fin) values ('22222222-2222-2222-2222-222222222221', current_date + 30, current_date + 30)$q$,
+  $q$insert into public.conges (collaborateur_id, date_debut, date_fin) values ('22222222-2222-2222-2222-222222222221', abse.j(30), abse.j(30))$q$,
   'permission denied');
 select abse.refus('collaboratrice : fonction de service inaccessible',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'rtt', current_date + 30, current_date + 30, false, false, 1, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'rtt', abse.j(30), abse.j(30), false, false, 1, null, null)$q$,
   'permission denied');
 select abse.qui(:M, 'bbbbbbbb-0000-0000-0000-000000000041');
 select abse.refus('manager : lecture de solde_conges fermée (ouverte jusqu''ici à tous les managers)',
@@ -183,7 +185,7 @@ select abse.refus('admin (jeton) : solde_conges non modifiable directement',
 select abse.refus('admin (jeton) : création de fiche avec un solde refusée',
   $q$insert into public.collaborateurs (nom, taux_horaire, solde_conges) values ('X', 0, 40)$q$, 'permission denied');
 select abse.passe('admin (jeton) : création de fiche de l''écran Utilisateurs (nom, prénom, email, poste, entrée, taux) possible',
-  $q$insert into public.collaborateurs (nom, prenom, email, poste, date_entree, taux_horaire) values ('Compat-Utilisateurs', 'U', 'compat-abs@exemple.invalid', 'Essai', current_date, 1)$q$);
+  $q$insert into public.collaborateurs (nom, prenom, email, poste, date_entree, taux_horaire) values ('Compat-Utilisateurs', 'U', 'compat-abs@exemple.invalid', 'Essai', abse.j(0), 1)$q$);
 select abse.refus('admin (jeton) : décision directe sur un congé refusée',
   $q$update public.conges set statut = 'validee'$q$, 'permission denied');
 select abse.qui(:P, 'bbbbbbbb-0000-0000-0000-000000000047');
@@ -209,64 +211,64 @@ select abse.ok('collaboratrice : demande de 1,5 jour (J+20 matin → J+21 midi),
           and historique -> 0 ->> 'action' = 'demande' and decide_par is null and solde_preleve is null
      from public.conges where id = abse.get('c_lea')::uuid));
 select abse.refus('demande pour une autre personne (collaboratrice) : refusée',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222223', 'rtt', current_date + 60, current_date + 60, false, false, 1, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222223', 'rtt', abse.j(60), abse.j(60), false, false, 1, null, null)$q$,
   'Vous ne pouvez demander des congés que pour vous-même.', true);
 select abse.refus('compte sans fiche rattachée : demande refusée',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000046', '22222222-2222-2222-2222-222222222221', 'rtt', current_date + 60, current_date + 60, false, false, 1, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000046', '22222222-2222-2222-2222-222222222221', 'rtt', abse.j(60), abse.j(60), false, false, 1, null, null)$q$,
   'Votre compte n''est rattaché à aucune fiche collaborateur : demande impossible.', true);
 select abse.refus('compte provisoire (mot de passe à changer) : refusé',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000047', '22222222-2222-2222-2222-222222222221', 'rtt', current_date + 60, current_date + 60, false, false, 1, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000047', '22222222-2222-2222-2222-222222222221', 'rtt', abse.j(60), abse.j(60), false, false, 1, null, null)$q$,
   'Action RH réservée à un compte actif.', true);
 select abse.refus('compte banni : refusé',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000048', '22222222-2222-2222-2222-2222222222e1', 'rtt', current_date + 60, current_date + 60, false, false, 1, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000048', '22222222-2222-2222-2222-2222222222e1', 'rtt', abse.j(60), abse.j(60), false, false, 1, null, null)$q$,
   'Action RH réservée à un compte actif.', true);
 select abse.refus('un seul jour, début l''après-midi et fin à midi : refusé',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', current_date + 60, current_date + 60, true, true, 0.5, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', abse.j(60), abse.j(60), true, true, 0.5, null, null)$q$,
   'Demi-journées incohérentes : une absence d''un seul jour ne peut pas commencer l''après-midi et finir à midi.', true);
 select abse.refus('0 jour : refusé',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', current_date + 60, current_date + 60, false, false, 0, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', abse.j(60), abse.j(60), false, false, 0, null, null)$q$,
   'Le nombre de jours doit être strictement positif.', true);
 select abse.refus('jours négatifs : refusés',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', current_date + 60, current_date + 60, false, false, -1, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', abse.j(60), abse.j(60), false, false, -1, null, null)$q$,
   'Le nombre de jours doit être strictement positif.', true);
 select abse.refus('0,25 jour (hors pas de 0,5) : refusé',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', current_date + 60, current_date + 60, false, false, 0.25, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', abse.j(60), abse.j(60), false, false, 0.25, null, null)$q$,
   'Le nombre de jours se saisit par demi-journée (pas de 0,5).', true);
 select abse.refus('0,333 jour (la colonne arrondirait) : refusé',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', current_date + 60, current_date + 60, false, false, 0.333, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', abse.j(60), abse.j(60), false, false, 0.333, null, null)$q$,
   'Le nombre de jours se saisit par demi-journée (pas de 0,5).', true);
 select abse.refus('3 jours sur une période de 2 jours : refusé (limite de la période)',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', current_date + 60, current_date + 61, false, false, 3, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', abse.j(60), abse.j(61), false, false, 3, null, null)$q$,
   'Le nombre de jours (3) dépasse la période demandée (2 jour(s) au plus, demi-journées comprises).', true);
 select abse.refus('2 jours de J+60 après-midi à J+61 : refusé (1,5 au plus)',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', current_date + 60, current_date + 61, true, false, 2, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', abse.j(60), abse.j(61), true, false, 2, null, null)$q$,
   'Le nombre de jours (2) dépasse la période demandée (1,5 jour(s) au plus, demi-journées comprises).', true);
 select abse.refus('demi-journée seule (0,5) sur une journée entière : la limite est un maximum, 0,5 accepté ; fin avant début refusée',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', current_date + 61, current_date + 60, false, false, 1, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', abse.j(61), abse.j(60), false, false, 1, null, null)$q$,
   'La date de fin précède la date de début.', true);
 select abse.passe('nombre inférieur à la période (1 jour sur 2, jour non travaillé) : accepté (saisie manuelle)',
-  $q$select abse.put('c_lea2', public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', current_date + 60, current_date + 61, false, false, 1, null, null)::text)$q$);
+  $q$select abse.put('c_lea2', public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', abse.j(60), abse.j(61), false, false, 1, null, null)::text)$q$);
 select abse.passe('J+70 après-midi → J+71 : 1,5 jour accepté',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', current_date + 70, current_date + 71, true, false, 1.5, null, null)$q$);
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', abse.j(70), abse.j(71), true, false, 1.5, null, null)$q$);
 select abse.passe('une seule demi-journée (J+75 après-midi) : 0,5 accepté',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', current_date + 75, current_date + 75, true, false, 0.5, null, null)$q$);
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', abse.j(75), abse.j(75), true, false, 0.5, null, null)$q$);
 -- Chevauchements à la demi-journée près.
 select abse.passe('J+21 après-midi (la demande existante finit à midi) : acceptée',
-  $q$select abse.put('c_lea3', public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', current_date + 21, current_date + 21, true, false, 0.5, null, null)::text)$q$);
+  $q$select abse.put('c_lea3', public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', abse.j(21), abse.j(21), true, false, 0.5, null, null)::text)$q$);
 select abse.refus('J+21 matin (chevauche J+20 → J+21 midi) : refusé',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'rtt', current_date + 21, current_date + 21, false, true, 0.5, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'rtt', abse.j(21), abse.j(21), false, true, 0.5, null, null)$q$,
   'Chevauchement : une demande en attente existe déjà du ' || to_char(abse.j(20), 'DD/MM/YYYY') || ' au ' || to_char(abse.j(21), 'DD/MM/YYYY') || ' (demi-journées comprises).', true);
 select abse.refus('J+75 matin → J+75 après-midi chevauche la demi-journée J+75 après-midi : refusé',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'rtt', current_date + 75, current_date + 75, false, false, 1, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'rtt', abse.j(75), abse.j(75), false, false, 1, null, null)$q$,
   'Chevauchement');
 select abse.passe('J+75 matin seul : accepté (l''après-midi est déjà demandé)',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', current_date + 75, current_date + 75, false, true, 0.5, null, null)$q$);
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', abse.j(75), abse.j(75), false, true, 0.5, null, null)$q$);
 -- Rétroactivité.
 select abse.refus('collaboratrice : demande sur une date passée refusée',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', current_date - 40, current_date - 40, false, false, 1, null, 'Oubli')$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'conges_payes', abse.j(-40), abse.j(-40), false, false, 1, null, 'Oubli')$q$,
   'Une demande sur une date passée est réservée à l''administrateur (avec motif).', true);
 select abse.refus('admin : demande rétroactive sans motif refusée',
-  $q$select public.abs_demander_conge('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222221', 'conges_payes', current_date - 40, current_date - 40, false, false, 1, null, '  ')$q$,
+  $q$select public.abs_demander_conge('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222221', 'conges_payes', abse.j(-40), abse.j(-40), false, false, 1, null, '  ')$q$,
   'Demande rétroactive : un motif est obligatoire.', true);
 select abse.put('c_retro', public.abs_demander_conge(:ADMIN, :FLEA, 'conges_payes', abse.j(-40), abse.j(-40), false, false, 1, null, ' Régularisation papier ')::text);
 select abse.ok('admin : demande rétroactive pour autrui, motif conservé, auteur tracé',
@@ -276,23 +278,23 @@ select abse.ok('admin : demande rétroactive pour autrui, motif conservé, auteu
 -- Entrée, sortie.
 update public.collaborateurs set date_sortie = abse.j(50) where id = :FNGU;
 select abse.refus('absence après la date de sortie : refusée',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000043', '22222222-2222-2222-2222-222222222223', 'conges_payes', current_date + 49, current_date + 51, false, false, 2, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000043', '22222222-2222-2222-2222-222222222223', 'conges_payes', abse.j(49), abse.j(51), false, false, 2, null, null)$q$,
   'Absence refusée : le collaborateur quitte l''entreprise le ' || to_char(abse.j(50), 'DD/MM/YYYY') || ' ; aucune absence ne peut être posée après.', true);
 select abse.passe('absence jusqu''au jour de sortie inclus : acceptée',
-  $q$select abse.put('c_ngu', public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000043', '22222222-2222-2222-2222-222222222223', 'conges_payes', current_date + 49, current_date + 50, false, false, 2, null, null)::text)$q$);
+  $q$select abse.put('c_ngu', public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000043', '22222222-2222-2222-2222-222222222223', 'conges_payes', abse.j(49), abse.j(50), false, false, 2, null, null)::text)$q$);
 select abse.refus('date de sortie avancée avant une absence demandée : refusée',
-  $q$update public.collaborateurs set date_sortie = current_date + 45 where id = '22222222-2222-2222-2222-222222222223'$q$,
+  $q$update public.collaborateurs set date_sortie = abse.j(45) where id = '22222222-2222-2222-2222-222222222223'$q$,
   'Date de sortie refusée : une absence (demandée ou validée) court jusqu''au ' || to_char(abse.j(50), 'DD/MM/YYYY') || '.', true);
 update public.collaborateurs set date_entree = abse.j(5) where id = :FHUG;
 select abse.refus('absence avant la date d''entrée : refusée',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000045', '22222222-2222-2222-2222-2222222222c2', 'sans_solde', current_date + 3, current_date + 6, false, false, 1, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000045', '22222222-2222-2222-2222-2222222222c2', 'sans_solde', abse.j(3), abse.j(6), false, false, 1, null, null)$q$,
   'Absence refusée : elle commence avant l''entrée du collaborateur');
 select abse.refus('type inconnu : refusé',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'maladie', current_date + 90, current_date + 90, false, false, 1, null, null)$q$,
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'maladie', abse.j(90), abse.j(90), false, false, 1, null, null)$q$,
   'Type d''absence inconnu : congés payés, RTT ou sans solde.', true);
 -- Écritures hors application.
 select abse.refus('clé secrète : congé créé directement, refusé',
-  $q$insert into public.conges (collaborateur_id, date_debut, date_fin, nb_jours) values ('22222222-2222-2222-2222-222222222221', current_date + 90, current_date + 90, 1)$q$,
+  $q$insert into public.conges (collaborateur_id, date_debut, date_fin, nb_jours) values ('22222222-2222-2222-2222-222222222221', abse.j(90), abse.j(90), 1)$q$,
   'Congés : écriture directe interdite ; passez par l''application.', true);
 select abse.refus('clé secrète : statut changé directement, refusé',
   $q$update public.conges set statut = 'validee' where id = abse.get('c_lea')::uuid$q$,
@@ -347,7 +349,7 @@ select abse.ok('refus : motif enregistré, aucun prélèvement',
   abse.solde(:FLEA) = 23.5 and (select statut = 'refusee' and motif_decision = 'Réunion client' and solde_preleve is null
                                   from public.conges where id = abse.get('c_lea3')::uuid));
 select abse.passe('une demande refusée ne bloque plus ses dates (J+21 après-midi redemandé)',
-  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', current_date + 21, current_date + 21, true, false, 0.5, null, null)$q$);
+  $q$select public.abs_demander_conge('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', 'sans_solde', abse.j(21), abse.j(21), true, false, 0.5, null, null)$q$);
 select abse.refus('refusé puis validé : impossible',
   $q$select public.abs_decider_conge('aaaaaaaa-0000-0000-0000-000000000041', abse.get('c_lea3')::uuid, 'valider', null)$q$,
   'Décision déjà prise (demande refusée) : une demande validée ou refusée ne change plus.', true);
@@ -475,72 +477,72 @@ select abse.ok('même création rejouée (réponse perdue) : même note, aucun d
   (public.abs_creer_note(:L, :FLEA, abse.j(-2), 42.5, 'repas', null, 'Déjeuner chantier', abse.get('f1'), 'application/pdf', 2048, repeat('a', 64))
      ->> 'id') = abse.get('n1') and (select count(*) = 1 from public.notes_de_frais));
 select abse.refus('même fichier, empreinte différente : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 42.5, 'repas', null, 'X', abse.get('f1'), 'application/pdf', 2048, repeat('b', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 42.5, 'repas', null, 'X', abse.get('f1'), 'application/pdf', 2048, repeat('b', 64))$q$,
   'Justificatif déjà rattaché à une autre note de frais.', true);
 select abse.refus('fichier du dossier de Léa pour la fiche de Nguyen (admin) : refusé',
-  $q$select public.abs_creer_note('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222223', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222223', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Justificatif : emplacement non conforme (dossier du collaborateur concerné uniquement).', true);
 select abse.refus('chemin hors format (remontée de dossier) : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', '22222222-2222-2222-2222-222222222221/../autre.pdf', 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', '22222222-2222-2222-2222-222222222221/../autre.pdf', 'application/pdf', 10, repeat('c', 64))$q$,
   'Justificatif : emplacement non conforme (dossier du collaborateur concerné uniquement).', true);
 select abse.refus('type texte : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'text/plain', 10), 'text/plain', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'text/plain', 10), 'text/plain', 10, repeat('c', 64))$q$,
   'Justificatif : format refusé (PDF, JPEG ou PNG uniquement).', true);
 select abse.refus('extension .png déclarée PDF : refusée',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'png', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'png', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Justificatif : extension et format incohérents.', true);
 select abse.refus('fichier vide : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 0), 'application/pdf', 0, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 0), 'application/pdf', 0, repeat('c', 64))$q$,
   'Justificatif : fichier vide ou de plus de 10 Mo.', true);
 select abse.refus('10 Mo + 1 octet : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10485761), 'application/pdf', 10485761, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10485761), 'application/pdf', 10485761, repeat('c', 64))$q$,
   'Justificatif : fichier vide ou de plus de 10 Mo.', true);
 select abse.passe('10 Mo exactement : accepté',
-  $q$select abse.put('n10mo', public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 3, 10, 'fournitures', null, 'Classeurs', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10485760), 'application/pdf', 10485760, repeat('e', 64)) ->> 'id')$q$);
+  $q$select abse.put('n10mo', public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-3), 10, 'fournitures', null, 'Classeurs', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10485760), 'application/pdf', 10485760, repeat('e', 64)) ->> 'id')$q$);
 select abse.refus('empreinte mal formée : refusée',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, 'ABC')$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, 'ABC')$q$,
   'Justificatif : empreinte SHA-256 absente ou mal formée.', true);
 select abse.refus('fichier absent du stockage (dépôt échoué) : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', '22222222-2222-2222-2222-222222222221/' || gen_random_uuid() || '.pdf', 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', '22222222-2222-2222-2222-222222222221/' || gen_random_uuid() || '.pdf', 'application/pdf', 10, repeat('c', 64))$q$,
   'Justificatif absent du stockage : déposez le fichier à nouveau.', true);
 select abse.refus('taille déclarée différente de la taille stockée : refusée',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 11), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 11), 'application/pdf', 10, repeat('c', 64))$q$,
   'Justificatif : la taille stockée diffère de la taille contrôlée par le serveur.', true);
 select abse.refus('type stocké différent du type contrôlé : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'image/png', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'image/png', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Justificatif : le type stocké diffère du type contrôlé par le serveur.', true);
 select abse.refus('dépôt de plus de 30 minutes : refusé (le nettoyage peut le viser)',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10, '31 minutes'), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10, '31 minutes'), 'application/pdf', 10, repeat('c', 64))$q$,
   'Justificatif déposé il y a plus de 30 minutes : déposez le fichier à nouveau.', true);
 select abse.refus('catégorie inconnue : refusée',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'cadeau', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'cadeau', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Catégorie inconnue : déplacement, repas, hébergement, carburant, fournitures ou autre.', true);
 select abse.refus('« autre » sans précision : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'autre', '   ', 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'autre', '   ', 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Catégorie « autre » : la précision est obligatoire.', true);
 select abse.refus('objet vide (espaces) : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, '   ', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, '   ', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'L''objet de la dépense est obligatoire.', true);
 select abse.refus('objet de 301 caractères : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, repeat('x', 301), abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, repeat('x', 301), abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'L''objet de la dépense est limité à 300 caractères.', true);
 select abse.refus('montant nul : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 0, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 0, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Le montant TTC doit être strictement positif.', true);
 select abse.refus('montant à 3 décimales : refusé (pas d''arrondi silencieux)',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10.005, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10.005, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Montant : au plus 2 décimales (la base arrondirait en silence) et moins de 100 000 000 €.', true);
 select abse.refus('dépense datée dans le futur : refusée',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date + 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Date de la dépense refusée : elle ne peut pas être dans le futur.', true);
 select abse.refus('dépense avant l''entrée : refusée',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000045', '22222222-2222-2222-2222-2222222222c2', current_date - 1, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-2222222222c2', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000045', '22222222-2222-2222-2222-2222222222c2', abse.j(-1), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-2222222222c2', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Date de la dépense refusée : antérieure à l''entrée du collaborateur');
 select abse.refus('collaboratrice : note pour Nguyen refusée',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222223', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222223', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222223', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222223', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Vous ne pouvez déposer des notes de frais que pour vous-même.', true);
 select abse.refus('compte sans fiche : note refusée',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000046', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000046', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 10), 'application/pdf', 10, repeat('c', 64))$q$,
   'Votre compte n''est rattaché à aucune fiche collaborateur : note de frais impossible.', true);
 select abse.refus('clé secrète : note créée directement, refusée',
   $q$insert into public.notes_de_frais (collaborateur_id, montant, categorie, objet, justificatif_url, justificatif_type, justificatif_taille, justificatif_empreinte) values ('22222222-2222-2222-2222-222222222221', 10, 'repas', 'X', 'a', 'application/pdf', 1, repeat('a', 64))$q$,
@@ -551,29 +553,29 @@ select abse.ok('admin : note pour autrui (« autre » + précision), auteur trac
   (select soumise_par = :ADMIN and categorie_precision = 'Péage' from public.notes_de_frais where id = abse.get('n2')::uuid));
 -- Modification tant que « soumise ».
 select abse.refus('modification par un collègue : refusée',
-  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000043', abse.get('n1')::uuid, current_date - 2, 40, 'repas', null, 'Déjeuner', null, null, null, null)$q$,
+  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000043', abse.get('n1')::uuid, abse.j(-2), 40, 'repas', null, 'Déjeuner', null, null, null, null)$q$,
   'Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.', true);
 select abse.refus('modification par le manager : refusée (il décide, il ne corrige pas)',
-  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000041', abse.get('n1')::uuid, current_date - 2, 40, 'repas', null, 'Déjeuner', null, null, null, null)$q$,
+  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000041', abse.get('n1')::uuid, abse.j(-2), 40, 'repas', null, 'Déjeuner', null, null, null, null)$q$,
   'Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.', true);
 select abse.refus('modification par l''administrateur de la note d''une autre personne : refusée',
-  $q$select public.abs_modifier_note('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, current_date - 2, 1, 'repas', null, 'Corrigé par l''admin', null, null, null, null)$q$,
+  $q$select public.abs_modifier_note('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, abse.j(-2), 1, 'repas', null, 'Corrigé par l''admin', null, null, null, null)$q$,
   'Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.', true);
 select abse.refus('note déposée par l''admin POUR Léa : l''admin ne la modifie pas non plus',
-  $q$select public.abs_modifier_note('11111111-1111-1111-1111-111111111111', abse.get('n2')::uuid, current_date - 1, 1, 'autre', 'Péage', 'Autoroute', null, null, null, null)$q$,
+  $q$select public.abs_modifier_note('11111111-1111-1111-1111-111111111111', abse.get('n2')::uuid, abse.j(-1), 1, 'autre', 'Péage', 'Autoroute', null, null, null, null)$q$,
   'Seule la personne concernée modifie sa note soumise ; un responsable la valide ou la refuse avec un motif.', true);
 select abse.ok('contenu des notes inchangé après ces refus',
   (select montant = 42.5 from public.notes_de_frais where id = abse.get('n1')::uuid) and (select montant = 18 from public.notes_de_frais where id = abse.get('n2')::uuid));
 select abse.put('f1b', abse.depot(:FLEA, 'png', 'image/png', 777));
 select abse.passe('collaboratrice : montant corrigé et justificatif remplacé (note soumise)',
-  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n1')::uuid, current_date - 2, 40, 'repas', null, 'Déjeuner chantier', abse.get('f1b'), 'image/png', 777, repeat('b', 64))$q$);
+  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n1')::uuid, abse.j(-2), 40, 'repas', null, 'Déjeuner chantier', abse.get('f1b'), 'image/png', 777, repeat('b', 64))$q$);
 select abse.ok('modification tracée : valeurs et justificatif précédents dans l''historique ; ancien fichier toujours rattaché',
   (select montant = 40 and justificatif_url = abse.get('f1b') and historique -> -1 ->> 'action' = 'modification'
           and (historique -> -1 -> 'avant' ->> 'montant')::numeric = 42.5 and historique -> -1 -> 'avant' ->> 'justificatif_url' = abse.get('f1')
      from public.notes_de_frais where id = abse.get('n1')::uuid)
   and public.abs_justificatif_rattache(abse.get('f1')) and public.abs_justificatif_rattache(abse.get('f1b')));
 select abse.refus('ancien justificatif réutilisé pour une autre note : refusé',
-  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', current_date - 2, 10, 'repas', null, 'X', abse.get('f1'), 'application/pdf', 2048, repeat('a', 64))$q$,
+  $q$select public.abs_creer_note('aaaaaaaa-0000-0000-0000-000000000042', '22222222-2222-2222-2222-222222222221', abse.j(-2), 10, 'repas', null, 'X', abse.get('f1'), 'application/pdf', 2048, repeat('a', 64))$q$,
   'Justificatif déjà rattaché à une autre note de frais.', true);
 -- Décisions.
 select abse.refus('la collaboratrice valide sa propre note : refusé',
@@ -586,10 +588,10 @@ select abse.passe('manager de l''équipe : note validée', $q$select public.abs_
 select abse.ok('validation rejouée : sans effet', (public.abs_decider_note(:M, abse.get('n1')::uuid, 'valider', null) ->> 'deja_decide')::boolean
   and (select statut = 'validee' and decide_par = :M from public.notes_de_frais where id = abse.get('n1')::uuid));
 select abse.refus('note validée : contenu non modifiable',
-  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n1')::uuid, current_date - 2, 45, 'repas', null, 'Déjeuner chantier', null, null, null, null)$q$,
+  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n1')::uuid, abse.j(-2), 45, 'repas', null, 'Déjeuner chantier', null, null, null, null)$q$,
   'Note validée : son contenu et son justificatif ne se modifient plus.', true);
 select abse.refus('note validée : justificatif non remplaçable',
-  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n1')::uuid, current_date - 2, 40, 'repas', null, 'Déjeuner chantier', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 5), 'application/pdf', 5, repeat('9', 64))$q$,
+  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n1')::uuid, abse.j(-2), 40, 'repas', null, 'Déjeuner chantier', abse.depot('22222222-2222-2222-2222-222222222221', 'pdf', 'application/pdf', 5), 'application/pdf', 5, repeat('9', 64))$q$,
   'Note validée : son contenu et son justificatif ne se modifient plus.', true);
 select abse.refus('note validée : empreinte modifiée directement (même avec un contexte), refusée',
   $q$select public.abs_contexte('11111111-1111-1111-1111-111111111111', 'modifier_note', null); update public.notes_de_frais set justificatif_empreinte = repeat('0', 64) where id = abse.get('n1')::uuid$q$,
@@ -608,26 +610,26 @@ select abse.refus('note refusée : plus de validation',
   $q$select public.abs_decider_note('aaaaaaaa-0000-0000-0000-000000000041', abse.get('n10mo')::uuid, 'valider', null)$q$,
   'Décision déjà prise : cette note n''est plus « soumise ».', true);
 select abse.refus('note refusée : pas de remboursement',
-  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n10mo')::uuid, current_date, null)$q$,
+  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n10mo')::uuid, abse.j(0), null)$q$,
   'Seule une note validée se rembourse.', true);
 select abse.refus('note refusée : contenu non modifiable',
-  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n10mo')::uuid, current_date - 3, 11, 'fournitures', null, 'Classeurs', null, null, null, null)$q$,
+  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n10mo')::uuid, abse.j(-3), 11, 'fournitures', null, 'Classeurs', null, null, null, null)$q$,
   'Note refusée : son contenu et son justificatif ne se modifient plus.', true);
 -- Remboursement déclaré, corrections motivées.
 select abse.refus('remboursement d''une note soumise : refusé',
-  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n2')::uuid, current_date, null)$q$,
+  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n2')::uuid, abse.j(0), null)$q$,
   'Seule une note validée se rembourse.', true);
 select abse.refus('remboursement déclaré par le manager : refusé',
-  $q$select public.abs_declarer_remboursement('aaaaaaaa-0000-0000-0000-000000000041', abse.get('n1')::uuid, current_date, 'VIR-1')$q$,
+  $q$select public.abs_declarer_remboursement('aaaaaaaa-0000-0000-0000-000000000041', abse.get('n1')::uuid, abse.j(0), 'VIR-1')$q$,
   'Seul l''administrateur déclare un remboursement.', true);
 select abse.refus('date de remboursement future : refusée',
-  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, current_date + 5, 'VIR-1')$q$,
+  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, abse.j(5), 'VIR-1')$q$,
   'Date de remboursement obligatoire, ni future ni antérieure à la dépense.', true);
 select abse.refus('date de remboursement antérieure à la dépense : refusée',
-  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, current_date - 30, 'VIR-1')$q$,
+  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, abse.j(-30), 'VIR-1')$q$,
   'Date de remboursement obligatoire, ni future ni antérieure à la dépense.', true);
 select abse.passe('remboursement déclaré par l''admin',
-  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, current_date, ' VIR-2026-001 ')$q$);
+  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, abse.j(0), ' VIR-2026-001 ')$q$);
 select abse.ok('remboursement : date, référence, déclarant ; montant et justificatif inchangés',
   (select statut = 'remboursee' and rembourse_le = abse.j(0) and reference_remboursement = 'VIR-2026-001'
           and rembourse_declare_par = :ADMIN and montant = 40 and justificatif_url = abse.get('f1b')
@@ -635,22 +637,22 @@ select abse.ok('remboursement : date, référence, déclarant ; montant et justi
 select abse.ok('déclaration rejouée à l''identique : sans effet',
   (public.abs_declarer_remboursement(:ADMIN, abse.get('n1')::uuid, abse.j(0), 'VIR-2026-001') ->> 'deja_declare')::boolean);
 select abse.refus('nouvelle déclaration différente : refusée (correction motivée obligatoire)',
-  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, current_date, 'VIR-AUTRE')$q$,
+  $q$select public.abs_declarer_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, abse.j(0), 'VIR-AUTRE')$q$,
   'Remboursement déjà déclaré : utilisez la correction motivée.', true);
 select abse.refus('note remboursée : contenu non modifiable',
-  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n1')::uuid, current_date - 2, 41, 'repas', null, 'Déjeuner chantier', null, null, null, null)$q$,
+  $q$select public.abs_modifier_note('aaaaaaaa-0000-0000-0000-000000000042', abse.get('n1')::uuid, abse.j(-2), 41, 'repas', null, 'Déjeuner chantier', null, null, null, null)$q$,
   'Note remboursée : son contenu et son justificatif ne se modifient plus.', true);
 select abse.refus('correction sans motif : refusée',
-  $q$select public.abs_corriger_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, 'corriger', current_date, 'VIR-X', ' ')$q$,
+  $q$select public.abs_corriger_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, 'corriger', abse.j(0), 'VIR-X', ' ')$q$,
   'Correction : un motif est obligatoire.', true);
 select abse.refus('correction par le manager : refusée',
   $q$select public.abs_corriger_remboursement('aaaaaaaa-0000-0000-0000-000000000041', abse.get('n1')::uuid, 'annuler', null, null, 'Erreur')$q$,
   'Seul l''administrateur corrige une déclaration de remboursement.', true);
 select abse.refus('correction sans changement : refusée',
-  $q$select public.abs_corriger_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, 'corriger', current_date, 'VIR-2026-001', 'Rien')$q$,
+  $q$select public.abs_corriger_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, 'corriger', abse.j(0), 'VIR-2026-001', 'Rien')$q$,
   'Correction : aucune valeur ne change.', true);
 select abse.passe('correction de la référence, motivée',
-  $q$select public.abs_corriger_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, 'corriger', current_date, 'VIR-2026-002', 'Référence mal recopiée')$q$);
+  $q$select public.abs_corriger_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, 'corriger', abse.j(0), 'VIR-2026-002', 'Référence mal recopiée')$q$);
 select abse.passe('annulation de la déclaration, motivée',
   $q$select public.abs_corriger_remboursement('11111111-1111-1111-1111-111111111111', abse.get('n1')::uuid, 'annuler', null, null, 'Virement rejeté par la banque')$q$);
 select abse.ok('après annulation : « validée », champs de remboursement vides, historique complet et intact',
@@ -674,7 +676,7 @@ select abse.passe('note de Léa validée par l''admin (pour la suite)', $q$selec
 update public.profiles set collaborateur_id = :FLEA where id = :P;
 update auth.users set raw_app_meta_data = '{}' where id = :P;
 select abse.refus('un admin ne déclare pas le remboursement de sa propre note',
-  $q$select public.abs_declarer_remboursement('aaaaaaaa-0000-0000-0000-000000000047', abse.get('n2')::uuid, current_date, null)$q$,
+  $q$select public.abs_declarer_remboursement('aaaaaaaa-0000-0000-0000-000000000047', abse.get('n2')::uuid, abse.j(0), null)$q$,
   'Personne ne déclare le remboursement de ses propres notes de frais.', true);
 update public.profiles set collaborateur_id = null where id = :P;
 update auth.users set raw_app_meta_data = '{"doit_changer_mot_de_passe": true}' where id = :P;

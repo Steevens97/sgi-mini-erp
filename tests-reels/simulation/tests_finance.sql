@@ -440,10 +440,18 @@ select fne.ok('facture d''essai : ESSAI-FAC-AAAA-0001, compteur séparé, compte
   and (select essai from public.factures where id = :'fe')
   and (select valeur = 1 from public.compteurs where cle = 'facture_' || to_char(fne.aujourdhui(), 'YYYY'))
   and (select valeur = 1 from public.compteurs where cle = 'essai_facture_' || to_char(fne.aujourdhui(), 'YYYY')));
+-- Avec le module Relances (20261029100000), une relance ne s'écrit plus directement et celles d'une facture d'essai
+-- sont nettoyées avec elle (tests_relances.sql) ; sans lui, le refus d'origine est vérifié.
+select exists (select 1 from supabase_migrations.schema_migrations where version = '20261029100000') as module_relances \gset
+\if :module_relances
+select fne.refus('relance écrite directement refusée (module Relances)', format($q$insert into public.relances (facture_id, message) values ('%s', 'Essai de liaison')$q$, :'fe'), 'naît uniquement de la réservation');
+select fne.ok('après le refus : facture d''essai toujours présente', (select count(*) = 1 from public.factures where essai));
+\else
 insert into public.relances (facture_id, message) values (:'fe', 'Essai de liaison');
 select fne.refus('nettoyage refusé si une donnée est liée à une facture d''essai (relance) ; rien supprimé', $q$select public.supprimer_essais_finance()$q$, 'Nettoyage refusé');
 select fne.ok('après le refus : facture d''essai toujours présente', (select count(*) = 1 from public.factures where essai));
 delete from public.relances where facture_id = :'fe';
+\endif
 set role service_role;
 select public.supprimer_essais_finance() as net \gset
 reset role;

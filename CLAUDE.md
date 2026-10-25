@@ -14,6 +14,8 @@ Avancer étape par étape et s'arrêter à la fin de chaque étape.
 
 ## Schéma — 13 tables, NE PAS MODIFIER
 Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans demander.
+14e table APPROUVÉE le 25/10/2026, CRÉÉE EN PRODUCTION au temps 1 Relances (25/10/2026) : `relances_evenements` (événements de
+livraison reçus durablement) — voir « Relances automatiques ».
 
 - clients (id, nom, email_contact, telephone, adresse, created_at)
 - prospects (id, nom, societe, email, telephone, source, statut ∈ contacte/devis_envoye/gagne/perdu, client_id→clients, created_at)
@@ -283,8 +285,11 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Fiche réelle de l'utilisateur : attend ses informations et son taux confirmé.
 - Module Finance : DÉPLOYÉ (temps 1 et 2, 24/10/2026) ; émission réelle bloquée (coordonnées et conditions de paiement
   à confirmer ; facturation électronique : documentation provisoire) ; réception technique validée (24/10/2026).
-- Module Absences et notes de frais : TEMPS 1 FAIT (24/10/2026, migration seule, commit c981468 sur main) ; écrans NON
-  publiés (temps 2 en attente de l'accord de l'utilisateur) — voir la section « Module Absences ». Relances automatiques : non activées.
+- Module Absences et notes de frais : DÉPLOYÉ (temps 1 c981468 et temps 2 373e7a0 sur main, 24/10/2026), contrôles en
+  production terminés (2e passage compris) — voir la section « Module Absences ».
+- Relances automatiques des factures : TEMPS 1 FAIT (migration 20261029100000, commit 7bd9873 sur main, 25/10/2026) ;
+  temps 2 (écrans, envois désactivés) PRÉPARÉ : branche deploiement-relances-t2 (un seul commit au-dessus de main), NON publié ; NON activées
+  (aucun envoi réel, aucun secret saisi, aucun Cron, aucune extension installée) — voir « Relances automatiques ».
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
 - RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (24/10/2026) : module RH et correctif 20261026100000.
@@ -471,7 +476,20 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   projets et temps nomment leurs colonnes, il ne lit pas les factures) ; temps 2 = écrans, après « Supabase Preview » vert
   et 20261027100000 dans migrations_appliquees(). Chaque temps sur accord explicite de l'utilisateur.
 
-## Module Absences et notes de frais (migration 20261028100000) — TEMPS 1 FAIT, écrans non publiés
+## Module Absences et notes de frais (migration 20261028100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
+- RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (25/10/2026). Ne pas relancer les tests terminés.
+- TEMPS 2 FAIT (accord de l'utilisateur, 24/10/2026) : commit 373e7a0 sur main (parent c981468 ; contenu = branche testée,
+  0 migration, 0 secret). Vercel vert, Supabase Preview vert, toujours 11 migrations. Parcours en ligne
+  `parcours_absences_en_ligne.mjs` 59/59 (soldes à renseigner, confirmation à 0, droits du manager, refus
+  d'auto-validation, décompte unique, confidentialité des justificatifs, requêtes falsifiées, alerte des temps saisis) ;
+  2 dépôts abandonnés laissés VOLONTAIREMENT entre les passages (dossier de fiche jetable supprimée f628adf8-…,
+  fichiers 07e92463-….pdf et 423bfdb9-….pdf, 133 octets, déposés à 22:48 UTC, aucune note) ; 2e passage 62 min plus
+  tard : 5/5 (listés par la base, supprimés par le bouton admin, dossier vide). Pendant l'attente, le parcours RH
+  donnait 49/50 à cause de ces 2 fichiers (son contrôle « aucun reste » compte tout l'espace justificatifs) ; après le
+  2e passage : 50/50. Non-régression en ligne : tests_verrouillage 353/353, Utilisateurs 45/45, Commercial 57/57,
+  Finance 53/53, stockage réel 29/29. `instantane_complet.py` : 19/19 identiques à la photo d'avant le temps 2 ;
+  soldes réels inchangés (25 j « repris », RTT 0 « a_renseigner ») ; 0 reste (1 compte sgi@gmx.fr, 0 fiche jetable,
+  0 congé, 0 note, 0 compteur, 0 fichier dans les 3 espaces, 0 dépôt abandonné).
 - TEMPS 1 FAIT (accord de l'utilisateur, 24/10/2026) : commit c981468 sur main (parent 4af2157) = migration SEULE,
   créée depuis main (pas de fusion de la branche) ; vérifié avant l'envoi : 1 fichier ajouté, empreinte md5
   bd2b87c5d2d55811b31d02e40c23fa7e = version testée, aucun écran, aucune ancienne migration, aucun secret ; rejouée en local.
@@ -558,6 +576,164 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   `essais_stockage_absences.mjs` entièrement réussis. Après le temps 2 : `parcours_absences_en_ligne.mjs` (puis sa 2e phase
   ≥ 1 h plus tard), `instantane_complet.py`. Chaque temps sur accord explicite de l'utilisateur.
 
+## Relances automatiques des factures (migration 20261029100000) — TEMPS 1 FAIT (25/10/2026) ; écrans non publiés, non activé
+- TEMPS 1 FAIT (accord de l'utilisateur, 25/10/2026) : commit 7bd9873 poussé sur main en avance rapide (parent 373e7a0 = main ;
+  1 fichier ; md5 48b0c11051f7aceb92ac60709578417d = version testée ; aucun secret ; aucune ancienne migration). Vérifié avant :
+  champs compte_fournisseur (texte, `^[A-Za-z0-9._-]{3,64}$`, vide tant que jamais tentée ; NOT NULL dans relances_evenements) et
+  alerte (texte ≤ 300) conformes. Photo complète avant (instantane_complet, instantane : 11 migrations, 0 facture, 0 relance,
+  0 résidu, 1 compte). Après : Supabase Preview vert et Vercel vert ; appliquée en ~1 min ; 12 migrations (autotest passé en
+  production) ; nouvelles colonnes de relances et 14e table présentes et vides ; tests_verrouillage 450/450 (14 tables,
+  contrôles 4d) ; écrans en ligne (ancienne version) : Utilisateurs 45/45, RH 50/50, Commercial 57/57, Finance 53/53
+  (nettoyage des essais remplacé par la migration), Absences 59/59 puis 2e phase 5/5 (≈ 64 min après) ; instantane_complet :
+  19/19 identiques, seul changement prévu « table relances_evenements » absente → 0 ligne ; instantane : 0 résidu, 0 compteur,
+  bucket justificatifs vide. Navigateur Commercial « limite » refait en LOCAL : 2/2 (brouillon local complet : adresse, TVA MQ,
+  ligne ; compteur de la base d'essai à 9 999, inchangé ; compteur réel jamais touché).
+- TEMPS 2 PRÉPARÉ : branche deploiement-relances-t2 (un seul commit, parent 7bd9873 = main) = arbre identique à
+  preparation-relances (écrans Relances, routes, tests, documentation), AUCUN fichier supabase/. Envois désactivés : sans les
+  variables RELANCES_ACTIVES, RESEND_API_KEY, RELANCES_SECRET_CRON, RESEND_WEBHOOK_SECRET, RESEND_COMPTE_REFERENCE, rien
+  n'est réservé ni envoyé et les deux routes répondent 401. À publier seulement sur accord.
+- Relances automatiques : diagnostic en LECTURE SEULE seulement (25/10/2026) : aucun envoi d'email dans le code, aucune
+  dépendance d'email, aucune route d'API, aucun vercel.json ni workflow GitHub (donc aucun Cron côté code) ; table relances
+  vide ; pg_cron, pg_net, SMTP, Edge Functions et Cron Vercel à constater dans les tableaux de bord. Aucune implémentation,
+  aucun email, aucune modification de la base, aucun Cron sans accord.
+- Résultat du diagnostic exécuté par l'utilisateur (25/10/2026) : pg_cron 1.6.4 et pg_net 0.20.4 disponibles NON installés ;
+  Vault 0.3.1 installé, 0 secret ; aucune tâche Cron, aucun webhook, aucune fonction réseau ; relances : 0 ligne, colonnes et
+  contraintes identiques au socle simulé (pas de contrainte sur canal) ; 0 facture échue impayée. Plan des relances (Resend,
+  Supabase Cron + Vault) validé comme base ; date_envoi facultative approuvée ; domaine, expéditeur, calendrier, textes,
+  destinataire de test et suivi de livraison : voir décisions ci-dessous. Aucune implémentation autorisée.
+- Décisions de l'utilisateur pour les relances (25/10/2026, ne plus les redemander) : AUCUN domaine pour le moment, aucun achat ;
+  factures seulement (émises/envoyées, impayées, échues) ; J+7, J+15, J+30, au moins 8 jours entre deux relances ACCEPTÉES,
+  au plus une par facture et par jour (Martinique) ; lundi–vendredi 8 h–17 h Martinique, jours fériés non exclus (limite
+  affichée) ; les 3 textes proposés validés (aucune pénalité ni menace) ; PDF archivé joint après contrôle d'empreinte ;
+  suivi de livraison OUI (rejet définitif = blocage) ; Resend + Supabase Cron + Vault ; envoi entièrement automatique
+  seulement après essais et accord d'activation ; date_envoi facultative, remplie à l'acceptation ou constat admin tracé ;
+  aucun secret dans requete_fournisseur, historiques, journaux, commandes Cron, migrations ou URL. Adresse de test et
+  signature : à confirmer par l'utilisateur (n'en choisir aucune). Ne rien reprendre de la fiche INSEE « SG-INGENIERIE »
+  (autre entreprise).
+- Approbation renouvelée le 25/10/2026 (mêmes règles) : aucun bouton ne contourne les protections ; une échéance modifiée
+  pour un test ne concerne qu'une facture d'ESSAI ; secret dans l'en-tête Authorization, jamais dans l'URL.
+- Implémentation autorisée le 25/10/2026 (branche `preparation-relances` depuis main, essais LOCAUX seulement). Précisions de
+  l'utilisateur (ne plus les redemander) : le garde-fou quotidien interdit une NOUVELLE relance mais permet la reprise de la
+  même demande avec sa clé ; événements de livraison en double, en retard ou dans le désordre : jamais de régression, jamais
+  d'effacement d'un rejet ; fonction de déclenchement créée sans Vault/pg_net, échec explicite à l'appel s'ils manquent ;
+  contrôle du changement de compte fournisseur pendant une reprise ; aucune ancienne migration modifiée.
+- Migration (une seule, aucune autre table touchée) : relances.date_envoi facultative SANS défaut (remplie à l'acceptation ou
+  par constat admin) ; colonnes jour_relance, rang, essai, destinataire, objet, requete_fournisseur (demande figée, SANS
+  secret), requete_empreinte (SHA-256 de requete_fournisseur::text), pdf_empreinte, cle_idempotence (« sgi-relance-<id> »),
+  statut (reservee, en_cours, acceptee, refusee, rejetee, a_verifier, abandonnee), tentatives (≤ 5), premiere/derniere
+  tentative, limite_reprise (première tentative + 20 h, jamais modifiable), compte_fournisseur (RÉFÉRENCE NON SECRÈTE du
+  compte, `^[A-Za-z0-9._-]{3,64}$`, refusée si elle ressemble à un secret), accepte_le, fournisseur_id (unique), livre_le, rebond_le, rebond_motif, erreur, resolu_*, historique (ajout
+  seul) ; canal = email. Index : une par facture et par jour, un rang une fois (hors abandonnée/refusée), UNE relance non
+  résolue par facture (réservée, en cours, à vérifier, refusée ; rejetée tant que non résolue APRÈS le rejet).
+- Règles (relances_situation, même fonction partout : aperçu, simulation, réservation, déclencheur) : facture émise/envoyée,
+  impayée, échue, PDF disponible, client avec email ; relances dans l'ordre (J+7, J+15, J+30), écart ≥ 8 jours depuis la
+  dernière ACCEPTATION, aucune réservation, tentative ni acceptation le jour même (Martinique), lundi–vendredi 8 h–17 h.
+  Paramètres dans relances_parametres() (toute modification = nouvelle migration sur accord). Heure : relances_maintenant()
+  (= now() ; remplacée le temps de l'autotest et des essais locaux, définition d'origine contrôlée par empreinte).
+- Fonctions (clé secrète seulement) : relances_apercu, relances_reserver, relances_prendre (tentative enregistrée AVANT l'appel ;
+  refus si facture réglée, autre compte, limite atteinte, 5 tentatives, hors horaires ; réservation sans tentative > 20 h =
+  abandonnée), relances_resultat (acceptee | temporaire | refus | incertain ; rapproche ensuite les événements en attente),
+  relances_recevoir_evenement et les fonctions d'événements (voir ci-dessous), relances_resoudre (admin, motif ; email_accepte | aucun_envoi |
+  traitee ; jamais pendant une tentative récente), relances_a_reprendre, supprimer_essais_finance (remplacée après contrôle
+  d'empreinte : supprime aussi les relances d'essai). relances_declencher() : propriétaire postgres SEULEMENT (ni jetons, ni
+  clé secrète), lit `relances_secret_cron` et `relances_url` dans Vault, appel pg_net dynamique ; échoue explicitement sans
+  Vault, sans pg_net, sans secret (≥ 32 caractères) ou avec une adresse non conforme. AUCUNE tâche Cron créée.
+- Table relances : aucun droit pour les jetons (même admin) ; règle RLS de défense « relances_lecture_admin ».
+- ÉVÉNEMENTS DE LIVRAISON — 14e table `relances_evenements` (accord du 25/10/2026, remplace le 503 « en attente » de 28 h) :
+  colonnes evenement_id (clé = svix-id), type, fournisseur_id, relance_id (étiquette), compte_fournisseur (référence NON secrète
+  du compte qui a signé), survenu_le, detail (≤ 300, masqué s'il ressemble à un secret), recu_le (posé par la base), statut
+  (en_attente | rapproche | sans_suite), alerte, rapproche_le, relance_rapprochee, classe_par, classe_par_nom, classe_le,
+  motif_classement. Aucun droit pour les jetons (même admin ; règle de défense « relances_evenements_lecture_admin ») ;
+  service_role par les fonctions ; déclencheur relances_evenements_controle (tous les chemins) : insertion seulement par la
+  réception, contenu reçu jamais modifié, en_attente → rapproche (rapprochement) | sans_suite (classement admin), puis figé ;
+  suppression seulement par le nettoyage (rapprochés / sans suite depuis plus de 30 jours ; JAMAIS un événement en attente)
+  ou le nettoyage des essais (événements liés à une relance d'essai).
+  Fonctions (clé secrète) : relances_recevoir_evenement (ENREGISTRE puis rapproche ; même svix-id = « déjà ») ;
+  relances_rapprocher_evenement (jamais appliqué, alerte explicite, si : étiquette et identifiant désignent deux relances
+  différentes — même si l'une n'existe plus — ; la relance porte un autre identifiant ; jamais tentée ; autre compte ; refusée ;
+  abandonnée puis remplacée au même rang) ; relances_appliquer_evenement (AUCUN envoi : constate état, acceptation, livraison,
+  rejet ; « déjà appliqué » si l'evenement_id figure dans l'historique de la relance) ; relances_rapprocher_relance (appelée par
+  l'acceptation, le constat admin et un événement étiqueté) ; relances_rapprocher_tout et relances_purger_evenements (à chaque
+  exécution de /api/relances/executer, MÊME interrupteur coupé ; aucun envoi) ; relances_classer_evenement (admin, motif ≥ 5).
+  Verrou de transaction `relances_verrou_identifiant(fournisseur_id)` pris par la réception, la réponse et le constat AVANT le
+  verrou de la relance (sans lui, un événement reçu pendant l'enregistrement de la réponse restait en attente : prouvé par
+  tests_concurrence_relances, 15/17 sans, 17/17 avec).
+  Route /api/relances/livraison : 200 seulement APRÈS l'enregistrement (rapproché ou en attente) ; 500 si l'enregistrement
+  échoue (base, référence de compte absente) → renvoi par le fournisseur ; 401 sans signature valide.
+  Interruption prolongée (> 20 h) : la reprise est refusée (limite jamais renouvelée) ; un rapprochement tardif (constat admin
+  avec l'identifiant, ou événement étiqueté reçu 30 h après) ne crée AUCUNE tentative et ne modifie pas limite_reprise.
+  Renvoi après nettoyage : événement rapproché puis supprimé → réenregistré et rapproché SANS effet (« déjà appliqué ») ;
+  « sans suite » supprimé → revient EN ATTENTE comme un nouvel événement (même alerte s'il est toujours incohérent ; rapproché
+  normalement s'il correspond désormais à une relance) ; l'admin le reclasse.
+  Référence du compte : variable RESEND_COMPTE_REFERENCE (nom choisi, ex. « resend-sgi-1 », jamais une clé) ; obligatoire pour
+  envoyer et pour recevoir ; CHANGER DE COMPTE = changer la référence en même temps que la clé et le secret de signature.
+  Écran Finance → Relances : référence affichée, événements en attente (âge, alerte), « Classer sans suite » (motif) ; fiche
+  relance : compte fournisseur.
+  PROCÉDURE DE CHANGEMENT DE COMPTE FOURNISSEUR (décision du 25/10/2026 : AUCUNE empreinte de clé ; la référence fait foi) :
+  1) Vercel → interrupteur RELANCES_ACTIVES vidé (plus aucune réservation ni tentative ; rapprochement des événements continu) ;
+  2) écran Finance → Relances : noter les relances « en cours » / « réservée » / « à vérifier » de l'ancien compte ;
+  3) nouveau compte : nouvelle clé (RESEND_API_KEY), nouveau webhook (RESEND_WEBHOOK_SECRET) et NOUVELLE référence
+     (RESEND_COMPTE_REFERENCE, jamais une référence déjà utilisée, jamais une clé) — les trois changés ENSEMBLE ;
+     désactiver le webhook de l'ancien compte ;
+  4) redéployer, puis rétablir RELANCES_ACTIVES=1.
+  Effets (imposés par la base) : une relance déjà tentée avec l'ancienne référence n'est JAMAIS reprise avec la nouvelle —
+  relances_prendre répond « à vérifier » (« Compte fournisseur différent »), aucun appel ; l'administrateur consulte le tableau
+  de bord de l'ANCIEN compte et enregistre un constat (« email accepté » avec son identifiant, ou « aucun envoi ») ; un
+  événement signé pour la nouvelle référence n'est jamais rapproché d'une relance de l'ancienne (alerte « Compte fournisseur
+  différent »). Une réservation jamais tentée part avec le nouveau compte (aucun email n'existe chez l'ancien).
+  Limite assumée : changer la clé SANS changer la référence n'est pas détecté (reprise possible avec un compte dont la
+  protection anti-doublon ignore la clé → risque de double envoi) : d'où l'obligation de l'étape 3. Événements tardifs de
+  l'ancien compte après le changement du secret de signature : refusés (401), donc à constater manuellement.
+- Site : src/lib/relances.ts (textes validés, demande figée, corps envoyé, classement des réponses, lecture des événements ;
+  EXPEDITEUR_RELANCES et SIGNATURE_RELANCES VIDES → relances réelles bloquées ; essais : expéditeur onboarding@resend.dev,
+  destinataire = RELANCES_ADRESSE_ESSAI, vide = aucun envoi d'essai) ; src/lib/relances/serveur.ts (envoi : appel direct à
+  l'API, Idempotency-Key, PDF relu et vérifié par empreinte, jamais régénéré) ; routes /api/relances/executer (secret partagé
+  RELANCES_SECRET_CRON, interrupteur RELANCES_ACTIVES=1) et /api/relances/livraison (signature RESEND_WEBHOOK_SECRET, format
+  Svix, 5 min) exemptées de session dans proxy.ts ; écran Finance → Relances (état de la configuration sans valeurs,
+  simulation sans écriture ni envoi, factures sans PDF / clients sans email à part) et fiche relance (résolution motivée).
+  RESEND_URL : essais locaux seulement (imitation) ; ne jamais le renseigner dans Vercel.
+- 1re préparation (avant la 14e table) — tests locaux (25/10/2026) : `rejouer.sh tests_relances.sql` 124/124 (factures d'ESSAI seulement pour les échéances passées ;
+  la facture réelle de test garde une échéance future et ne reçoit aucune relance) ; `tests_concurrence_relances.sh` 14/14 (après
+  rejouer.sh) ; `test_relances_martinique.sh '<instant UTC>' '<attendu>'` 6 instants × 5/5 (migration appliquée un samedi et
+  le 31/12 à 22 h 30) ; `test_sabotages_relances.sh` 19/19 sabotages arrêtés ; `node --experimental-strip-types
+  tests-reels/tests_relances_module.mts` 18/18 ; `essais_relances_locaux.mjs` (depuis scratchpad/essais, SGI_DEPOT=<dépôt>,
+  après comptes_navigateur.sql, build local et pile_locale.sh start ; imitation du fournisseur `imitation_resend.mjs`, AUCUN
+  email) 41/41 (dont secret placé dans l'URL sans en-tête : refusé ; écran sans aucun bouton d'envoi, de réservation ni
+  de modification d'échéance ; fiche : seul « Enregistrer la résolution ») ; `tests_verrouillage.py` 402/402 avec la migration (4d), 353/353 sans. Non-régression : Commercial 135/135,
+  17/17, 30/30, PDF 14/14, numérotation piégée, passage d'année ; RH 155/155, 28/28, 5/5, 8/8 ; Finance 118/118 (avec et sans
+  la migration ; tests_finance.sql adapté : une relance ne s'écrit plus directement), 88/88, 15/15, 6/6, PDF 19/19 ; Absences
+  197/197 et 95/95 (horloge simulée de jour, voir « Tests locaux »), 16/16, 22/22, 6/6 × 3 ; compatibilité Utilisateurs 17/17
+  avec et sans ; navigateur Commercial 26/26 et réel 4/4, RH 49/49, taux 7/7, Finance 54/54 et 21/21, Absences 76/76 (de jour et le
+  soir simulé, avec et sans la migration, après la correction des dates des scripts) ; répétitions locales Utilisateurs 45/45, Commercial 57/57, RH 50/50, Finance
+  53/53, Absences 59/59, stockage 29/29.
+- (Abandonné le 25/10/2026, à la demande de l'utilisateur) : réponse 503 « en attente » pendant 28 h sans rien écrire — un
+  renvoi demandé au fournisseur n'est pas une conservation. Remplacé par la 14e table (ci-dessus). Commits 63a2a69, 591a79c et
+  la branche deploiement-relances-t1 (a0aa42c) sont OBSOLÈTES : ne jamais les déployer.
+- Second passage local (25/10/2026, journée) : tests_relances.sql 129/129, essais_relances_locaux.mjs 44/44, sabotages 20/20 ;
+  Absences SQL 197/197 et API 95/95 de jour ET le soir (horloge simulée), avec et sans la migration ; navigateur Absences
+  76/76 de jour et le soir simulé, avec et sans la migration ; toute la non-régression identique (voir ci-dessus).
+- Passage local avec la 14e table (25/10/2026, journée) : migration md5 48b0c11051f7aceb92ac60709578417d ; tests_relances.sql
+  167/167 ; tests_concurrence_relances.sh 17/17 (sans le verrou de l'identifiant : 15/17) ; test_sabotages_relances.sh 28/28 ;
+  essais_relances_locaux.mjs 52/52 ; test_relances_martinique.sh 6 instants × 5/5 ; tests_relances_module 18/18 ;
+  tests_verrouillage.py 449/449 avec la migration (14 tables), 353/353 sans. Non-régression avec ET sans la migration : Commercial
+  135/135 et 30/30, RH 155/155 et 28/28, Finance 118/118 et 88/88, Absences 197/197 et 95/95, compatibilité Utilisateurs 17/17 ;
+  concurrence Commercial 17/17 (après tests_commercial.sql), RH 5/5 (après tests_rh.sql), Finance 15/15, Absences 16/16 (après
+  tests_absences.sql) ; numérotation piégée ; temps existants 8/8 ; passage d'année Commercial et Finance 6/6 ; Absences horloge
+  6/6 × 3 ; PDF 14/14, 19/19 (après tests_finance.sql), justificatifs 22/22 ; navigateur Absences 76/76, Commercial 26/26 et réel
+  4/4, RH 49/49, taux 7/7, Finance 54/54 et 21/21, stockage 29/29 ; répétitions Utilisateurs 45/45, RH 50/50, Finance 53/53,
+  Commercial 57/57, Absences 59/59. NON refait : navigateur Commercial « limite » (préparation : brouillon réel avec traitement
+  de TVA, compteur à 9 999 ; la limite reste couverte par tests_commercial.sql) ; Absences le soir (non concerné par ce changement).
+  Commit temps 1 proposé : 7bd9873 (branche deploiement-relances-t1-durable, parent 373e7a0 = main), migration seule, NON fusionné.
+- Limites connues : présence des étiquettes dans les événements du fournisseur non vérifiée (repli par identifiant) ; file
+  interne de pg_net (en-têtes) à examiner à l'activation ; quota gratuit de 100 emails/jour non suivi par l'application ;
+  date_envoi d'une acceptation obtenue lors d'une reprise = heure de cette réponse (prudent) ; changement de compte pendant une
+  reprise = « à vérifier » (prudent) ; une CLÉ changée SANS changer la référence n'est pas détectée (la référence fait foi :
+  proposition non créée, colonne d'empreinte non réversible de la clé) ; événements en attente : jamais supprimés
+  automatiquement (classement admin) ; instantane_complet.py ne tourne pas sur la pile locale (liste des espaces non imitée).
+- Prochaines étapes (chacune sur accord) : temps 1 = migration seule ; temps 2 = écrans (aucun envoi possible : clés absentes,
+  interrupteur coupé) ; préparation (compte Resend, secrets dans Vault et Vercel, adresse de test, signature) ; activation =
+  migration distincte (pg_net, pg_cron, tâche toutes les 5 minutes) ; relances réelles seulement avec un domaine vérifié.
+
 ## Tests locaux dans le conteneur cloud
 - Base d'essai PostgreSQL 16 : `/var/tmp/pg-essai` (port 5499), démarrage :
   `su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D /var/tmp/pg-essai/data -o '-p 5499 -k /var/tmp/pg-essai -c listen_addresses=' -l /var/tmp/pg-essai/log start"`.
@@ -570,3 +746,10 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   le port 3200, lu dans /proc ; `ss` n'existe pas ici ; le pid de `setsid` désigne un intermédiaire déjà terminé).
   Toujours arrêter la pile locale (`pile_locale.sh stop`) avant `rejouer.sh` (sinon la base reste ouverte et rien n'est rejoué).
 - `.env.local` est régénéré depuis les variables d'environnement de la session (jamais commité).
+- Heure des tests : données de test TOUJOURS en date de Martinique (jamais current_date = UTC). Corrigé le 25/10/2026
+  (accord de l'utilisateur ; scripts seulement, aucune règle ni contrôle modifié) : tests_absences.sql (abse.j), temps de
+  démonstration du socle, tests_concurrence_absences.sh. Les valeurs par défaut des colonnes et prochain_numero du socle
+  restent la copie EXACTE de la base réelle. Avant : 104/108 et navigateur 75/76 entre 20 h et minuit (contre-épreuve refaite).
+- Soirée simulée pour le NAVIGATEUR : PostgREST (binaire statique) garde l'horloge réelle et refuse un jeton « émis dans le
+  futur » (JWTIssuedAtFuture) → décaler EN ARRIÈRE (FAKETIME='-9h' : base 5499, passerelle avec PASSERELLE_DUREE_JETON=86400,
+  serveur Next), jamais en avant.
