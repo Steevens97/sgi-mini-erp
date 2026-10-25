@@ -23,3 +23,15 @@ export async function resoudreRelance(_e: EtatAction, d: FormData): Promise<Etat
   revalidatePath(`/finance/relances/${id}`);
   redirect(`/finance/relances/${id}?confirmation=resolution`);
 }
+
+// Classement « sans suite » d'un événement de livraison resté en attente (administrateur, motif obligatoire, tracé).
+// Ne touche à aucune relance et n'envoie rien ; un événement n'est jamais classé automatiquement.
+export async function classerEvenement(_e: EtatAction, d: FormData): Promise<EtatAction> {
+  const moi = await exigerAdmin();
+  const { error } = await creerClientAdmin().rpc("relances_classer_evenement", {
+    p_admin: moi.id, p_evenement: String(d.get("evenement_id") ?? ""), p_motif: String(d.get("motif") ?? ""),
+  });
+  if (error) return { statut: "erreur", message: messageBase(error.message) };
+  revalidatePath("/finance/relances");
+  redirect("/finance/relances?confirmation=classement");
+}

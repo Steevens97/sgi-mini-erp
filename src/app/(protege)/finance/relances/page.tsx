@@ -4,6 +4,8 @@ import { creerClientAdmin } from "@/lib/supabase/admin";
 import { CALENDRIER_RELANCES, LIBELLES_STATUT_RELANCE, LIMITES_RELANCES, blocagesRelancesReelles, construireDemande,
          type FactureARelancer } from "@/lib/relances";
 import { dateFr, euros } from "@/lib/format";
+import { FormulaireAction, champ } from "../../commercial/composants";
+import { classerEvenement } from "./actions";
 
 // Écran des relances (administrateur). Lecture avec la clé secrète après exigerAdmin. La SIMULATION n'écrit rien et
 // n'envoie rien : elle calcule l'aperçu de la base (fonction en lecture seule) et construit les messages à l'écran,
@@ -13,19 +15,25 @@ type Ligne = FactureARelancer & { facture_id: string; client_nom: string; client
 type Relance = { id: string; rang: number; statut: string; essai: boolean; destinataire: string; objet: string; created_at: string;
   tentatives: number; date_envoi: string | null; livre_le: string | null; rebond_le: string | null; erreur: string | null;
   factures: { numero: string } | null };
+type EvenementAttente = { evenement_id: string; type: string; fournisseur_id: string | null; relance_id: string | null;
+  compte_fournisseur: string; survenu_le: string; recu_le: string; alerte: string | null };
 
 const heure = (t: string | null) => t ? new Date(t).toLocaleString("fr-FR", { timeZone: "America/Martinique" }) : "—";
 const ZERO = "00000000-0000-0000-0000-000000000000";
 
-export default async function PageRelances({ searchParams }: { searchParams: Promise<{ simulation?: string }> }) {
+export default async function PageRelances({ searchParams }: { searchParams: Promise<{ simulation?: string; confirmation?: string }> }) {
   await exigerAdmin();
-  const simulation = (await searchParams).simulation === "1";
+  const parametres = await searchParams;
+  const simulation = parametres.simulation === "1";
   const admin = creerClientAdmin();
-  const [{ data: apercu }, { data: relances }] = await Promise.all([
+  const [{ data: apercu }, { data: relances }, { data: attente }] = await Promise.all([
     admin.rpc("relances_apercu"),
     admin.from("relances").select("id, rang, statut, essai, destinataire, objet, created_at, tentatives, date_envoi, livre_le, rebond_le, erreur, factures(numero)")
       .order("created_at", { ascending: false }).limit(200),
+    admin.from("relances_evenements").select("evenement_id, type, fournisseur_id, relance_id, compte_fournisseur, survenu_le, recu_le, alerte")
+      .eq("statut", "en_attente").order("recu_le").limit(200),
   ]);
+  const evenements = (attente ?? []) as EvenementAttente[];
   const lignes = (apercu ?? []) as Ligne[];
   const liste = (relances ?? []) as unknown as Relance[];
   const actives = process.env.RELANCES_ACTIVES === "1";
@@ -37,6 +45,9 @@ export default async function PageRelances({ searchParams }: { searchParams: Pro
     ["Secret de signature des événements de livraison", (process.env.RESEND_WEBHOOK_SECRET ?? "").startsWith("whsec_")],
     ["Adresse de test confirmée (essais)", !!adresseEssai],
   ] as const;
+  // Référence du compte fournisseur : un nom NON secret, affiché tel quel (contrôle de format seulement ici).
+  const referenceCompte = (process.env.RESEND_COMPTE_REFERENCE ?? "").trim();
+  const referenceConforme = /^[A-Za-z0-9._-]{3,64}$/.test(referenceCompte) && !/^(re_|whsec_)/i.test(referenceCompte);
   const bloquesReels = blocagesRelancesReelles();
   const sansPdf = lignes.filter((l) => !l.pdf_disponible);
   const sansEmail = lignes.filter((l) => l.pdf_disponible && !l.email_client);
@@ -44,11 +55,14 @@ export default async function PageRelances({ searchParams }: { searchParams: Pro
   return (
     <div className="space-y-6">
       <p className="text-sm"><Link href="/finance" className="underline">← Finance</Link></p>
+      {parametres.confirmation === "classement" && <p role="status" data-confirmation className="rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">
+        Événement classé sans suite. Aucune relance n&apos;a été modifiée, aucun email n&apos;a été envoyé.</p>}
       <h1 className="text-2xl font-semibold">Relances des factures</h1>
       <div role="alert" data-etat-relances={actives ? "actives" : "inactives"}
         className={`rounded-md border p-3 text-sm ${actives ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-amber-300 bg-amber-50 text-amber-900"}`}>
         <p className="font-medium">{actives ? "Relances automatiques activées." : "Relances automatiques NON activées : aucun email n'est envoyé."}</p>
-        <ul className="mt-1 list-disc pl-5">{etat.map(([libelle, present]) => <li key={libelle}>{libelle} : {present ? "renseigné" : "absent"}</li>)}</ul>
+        <ul className="mt-1 list-disc pl-5">{etat.map(([libelle, present]) => <li key={libelle}>{libelle} : {present ? "renseigné" : "absent"}</li>)}
+          <li data-reference-compte>Référence du compte fournisseur (non secrète) : {referenceConforme ? referenceCompte : referenceCompte ? "non conforme" : "absente"}</li></ul>
         {bloquesReels.length > 0 && (<>
           <p className="mt-2 font-medium">Relances réelles bloquées :</p>
           <ul className="list-disc pl-5" data-blocages-reels>{bloquesReels.map((b) => <li key={b}>{b}</li>)}</ul>
@@ -116,6 +130,25 @@ export default async function PageRelances({ searchParams }: { searchParams: Pro
           <ul className="mt-1 list-disc pl-5">{sansEmail.map((l) => <li key={l.facture_id}>{l.numero} — {l.client_nom}</li>)}</ul>
           {!sansEmail.length && <p className="text-slate-500">Aucun.</p>}
         </div>
+      </section>
+
+      <section data-evenements-attente>
+        <h2 className="mb-2 text-lg font-semibold">Événements de livraison en attente ({evenements.length})</h2>
+        <p className="mb-2 text-sm text-slate-600">Événements signés reçus du fournisseur, conservés tant qu&apos;ils ne sont pas rapprochés
+          d&apos;une relance (aucune suppression automatique). Ils sont rapprochés dès que l&apos;identifiant de l&apos;email est connu ; une
+          alerte signale une incohérence (événement jamais appliqué). Le classement « sans suite » ne modifie aucune relance.</p>
+        {evenements.map((e) => (
+          <div key={e.evenement_id} data-evenement={e.evenement_id} className={`mb-2 rounded-lg border bg-white p-3 text-sm ${e.alerte ? "border-red-300" : "border-slate-200"}`}>
+            <p><strong>{e.type}</strong> — survenu le {heure(e.survenu_le)} — reçu le {heure(e.recu_le)} — compte {e.compte_fournisseur}</p>
+            <p className="text-slate-600">Identifiant de l&apos;email : {e.fournisseur_id ?? "—"} ; relance indiquée : {e.relance_id ?? "—"}</p>
+            {e.alerte && <p role="alert" data-alerte className="mt-1 text-red-800">Alerte : {e.alerte}</p>}
+            <FormulaireAction action={classerEvenement} caches={{ evenement_id: e.evenement_id }} libelle="Classer sans suite"
+              confirmation="Classer cet événement sans suite ? Aucune relance ne sera modifiée." className="mt-2 flex flex-wrap items-end gap-2">
+              <label className="text-sm">Motif (obligatoire)
+                <input name="motif" required minLength={5} className={champ} /></label>
+            </FormulaireAction>
+          </div>))}
+        {!evenements.length && <p className="text-sm text-slate-500">Aucun événement en attente.</p>}
       </section>
 
       <section>

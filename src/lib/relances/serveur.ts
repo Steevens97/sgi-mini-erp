@@ -9,7 +9,9 @@ import { classerReponse, construireDemande, corpsFournisseur, lireEvenement, typ
 // fichier. Secrets lus dans les variables d'environnement du serveur, jamais journalisés, jamais enregistrés :
 //   RESEND_API_KEY (clé du fournisseur), RELANCES_SECRET_CRON (secret partagé avec Vault), RESEND_WEBHOOK_SECRET
 //   (signature des événements). Réglages : RELANCES_ACTIVES=1 (interrupteur), RELANCES_ADRESSE_ESSAI (destinataire
-//   des essais, confirmé par l'utilisateur), RESEND_URL (essais locaux seulement : imitation du fournisseur).
+//   des essais, confirmé par l'utilisateur), RESEND_COMPTE_REFERENCE (référence NON secrète du compte fournisseur, à
+//   changer avec la clé et le secret de signature si l'on change de compte), RESEND_URL (essais locaux seulement :
+//   imitation du fournisseur).
 
 const URL_FOURNISSEUR = "https://api.resend.com";
 const DELAI_APPEL_MS = 20000;
@@ -20,13 +22,19 @@ export function configuration() {
     cle: process.env.RESEND_API_KEY ?? "",
     actives: process.env.RELANCES_ACTIVES === "1",
     adresseEssai: (process.env.RELANCES_ADRESSE_ESSAI ?? "").trim().toLowerCase() || null,
+    compte: (process.env.RESEND_COMPTE_REFERENCE ?? "").trim(),
   };
 }
 
-// Empreinte NON réversible du compte utilisé (adresse du fournisseur + clé) : une reprise avec un autre compte (dont
-// la protection anti-doublon ne connaît pas la clé) est refusée par la base. Ce n'est pas la clé.
-export function empreinteCompte(url: string, cle: string): string {
-  return createHash("sha256").update(`sgi-relances-compte|${url}|${cle}`).digest("hex").slice(0, 32);
+// Référence du compte fournisseur : un NOM choisi par l'administrateur (ex. « resend-sgi-1 »), jamais une clé ni un
+// secret. Elle est enregistrée sur chaque relance tentée et sur chaque événement reçu : une reprise avec un autre compte
+// est refusée, et un événement d'un autre compte n'est jamais rapproché. La base refuse aussi ce qui ressemble à un secret.
+export function referenceCompteValide(reference: string): boolean {
+  if (!/^[A-Za-z0-9._-]{3,64}$/.test(reference)) return false;
+  if (/^(re_|whsec_)/i.test(reference)) return false;
+  const secrets = [process.env.RESEND_API_KEY, process.env.RESEND_WEBHOOK_SECRET, process.env.RELANCES_SECRET_CRON]
+    .filter((x): x is string => !!x && x.length >= 8);
+  return !secrets.some((x) => reference.includes(x) || x.includes(reference) && reference.length >= 16);
 }
 
 function egalSur(a: string, b: string): boolean {
@@ -67,7 +75,8 @@ function stockageFactures(): StockageDevis {
 const sha256 = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
 
 export type Bilan = { actives: boolean; reprises: number; reservees: number; acceptees: number; temporaires: number; refus: number;
-                      incertaines: number; ignorees: { facture: string; motif: string }[]; erreurs: string[] };
+                      incertaines: number; ignorees: { facture: string; motif: string }[]; erreurs: string[];
+                      evenements: { examines: number; rapproches: number; en_attente: number; alertes: number; purges: number } | null };
 
 type Prise = { action: string; tentative: number; requete_texte: string; requete_empreinte: string; cle_idempotence: string;
                pdf_chemin: string; pdf_empreinte: string; statut?: string };
@@ -118,11 +127,18 @@ async function tenter(relanceId: string, compte: string, b: Bilan) {
 export async function executerRelances(limite = 10): Promise<Bilan> {
   const cfg = configuration();
   const b: Bilan = { actives: cfg.actives, reprises: 0, reservees: 0, acceptees: 0, temporaires: 0, refus: 0, incertaines: 0,
-                     ignorees: [], erreurs: [] };
+                     ignorees: [], erreurs: [], evenements: null };
+  const admin = creerClientAdmin();
+  // À chaque exécution, même interrupteur coupé (aucun envoi) : rapprochement des événements en attente, puis nettoyage
+  // des événements rapprochés ou classés depuis plus de 30 jours. Un événement en attente n'est jamais supprimé.
+  const { data: rap, error: er } = await admin.rpc("relances_rapprocher_tout");
+  const { data: purges, error: ep } = await admin.rpc("relances_purger_evenements");
+  if (er || ep) b.erreurs.push(`Événements : ${(er ?? ep)!.message}`);
+  else b.evenements = { ...(rap as { examines: number; rapproches: number; en_attente: number; alertes: number }), purges: purges as number };
   if (!cfg.actives) return b;
   if (!cfg.cle) { b.erreurs.push("Clé du fournisseur absente : aucune relance."); return b; }
-  const compte = empreinteCompte(cfg.url, cfg.cle);
-  const admin = creerClientAdmin();
+  if (!referenceCompteValide(cfg.compte)) { b.erreurs.push("Référence du compte fournisseur absente ou non conforme : aucune relance."); return b; }
+  const compte = cfg.compte;
   const { data: aReprendre, error: e1 } = await admin.rpc("relances_a_reprendre");
   if (e1) { b.erreurs.push(e1.message); return b; }
   for (const id of ((aReprendre ?? []) as string[]).slice(0, limite)) {
@@ -155,13 +171,17 @@ export async function executerRelances(limite = 10): Promise<Bilan> {
   return b;
 }
 
-// Événement de livraison vérifié : enregistré (doublons, retards et désordre traités par la base).
+// Événement de livraison vérifié : ENREGISTRÉ DURABLEMENT par la base (table relances_evenements) avec la référence du
+// compte qui l'a signé, puis rapproché si possible (sinon conservé en attente, avec une alerte s'il y a une anomalie).
+// Doublons, retards et désordre traités par la base. Sans référence de compte valide : erreur (le fournisseur renverra).
 export async function enregistrerEvenement(idEvenement: string, charge: unknown): Promise<string> {
   const e = lireEvenement(charge);
   if (!e || (!e.emailId && !e.relanceId)) return "ignore";
-  const { data, error } = await creerClientAdmin().rpc("relances_evenement_livraison", {
+  const compte = configuration().compte;
+  if (!referenceCompteValide(compte)) throw new Error("Référence du compte fournisseur absente ou non conforme");
+  const { data, error } = await creerClientAdmin().rpc("relances_recevoir_evenement", {
     p_evenement_id: idEvenement, p_type: e.type, p_fournisseur_id: e.emailId, p_relance: e.relanceId,
-    p_survenu_le: e.survenuLe, p_detail: e.detail,
+    p_survenu_le: e.survenuLe, p_detail: e.detail, p_compte: compte,
   });
   if (error) throw new Error(error.message);
   return (data as { resultat: string }).resultat;

@@ -23,7 +23,7 @@ export default async function PageRelance({ params, searchParams }: {
   const { id } = await params;
   const confirmation = (await searchParams).confirmation === "resolution";
   const { data: r } = await creerClientAdmin().from("relances")
-    .select("id, rang, statut, essai, destinataire, objet, message, created_at, jour_relance, tentatives, premiere_tentative_le, derniere_tentative_le, limite_reprise, accepte_le, date_envoi, fournisseur_id, livre_le, rebond_le, rebond_motif, erreur, resolu_par_nom, resolu_le, motif_resolution, historique, requete_fournisseur, factures(id, numero)")
+    .select("id, rang, statut, essai, destinataire, objet, message, created_at, jour_relance, tentatives, premiere_tentative_le, derniere_tentative_le, limite_reprise, compte_fournisseur, accepte_le, date_envoi, fournisseur_id, livre_le, rebond_le, rebond_motif, erreur, resolu_par_nom, resolu_le, motif_resolution, historique, requete_fournisseur, factures(id, numero)")
     .eq("id", id).maybeSingle();
   if (!r) notFound();
   const facture = r.factures as unknown as { id: string; numero: string } | null;
@@ -43,6 +43,7 @@ export default async function PageRelance({ params, searchParams }: {
         <dt className="text-slate-500">Réservée le (aucun envoi)</dt><dd>{heure(r.created_at)}</dd>
         <dt className="text-slate-500">Tentatives</dt><dd>{r.tentatives} (première : {heure(r.premiere_tentative_le)} ; dernière : {heure(r.derniere_tentative_le)})</dd>
         <dt className="text-slate-500">Limite de reprise (jamais renouvelée)</dt><dd>{heure(r.limite_reprise)}</dd>
+        <dt className="text-slate-500">Compte fournisseur (référence)</dt><dd data-compte>{r.compte_fournisseur ?? "— (jamais tentée)"}</dd>
         <dt className="text-slate-500">Acceptée par le fournisseur le</dt><dd data-date-envoi>{heure(r.date_envoi)}</dd>
         <dt className="text-slate-500">Livraison</dt><dd>{r.rebond_le ? `Rejetée le ${heure(r.rebond_le)} (${r.rebond_motif ?? "rejet définitif"})` : r.livre_le ? `Livrée le ${heure(r.livre_le)}` : "Non suivie ou inconnue"}</dd>
         <dt className="text-slate-500">Dernière erreur</dt><dd>{r.erreur ?? "—"}</dd>
