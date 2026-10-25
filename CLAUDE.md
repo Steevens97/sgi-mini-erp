@@ -14,7 +14,7 @@ Avancer étape par étape et s'arrêter à la fin de chaque étape.
 
 ## Schéma — 13 tables, NE PAS MODIFIER
 Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans demander.
-14e table APPROUVÉE le 25/10/2026 (branche et base locale seulement, NON déployée) : `relances_evenements` (événements de
+14e table APPROUVÉE le 25/10/2026, CRÉÉE EN PRODUCTION au temps 1 Relances (25/10/2026) : `relances_evenements` (événements de
 livraison reçus durablement) — voir « Relances automatiques ».
 
 - clients (id, nom, email_contact, telephone, adresse, created_at)
@@ -287,9 +287,9 @@ livraison reçus durablement) — voir « Relances automatiques ».
   à confirmer ; facturation électronique : documentation provisoire) ; réception technique validée (24/10/2026).
 - Module Absences et notes de frais : DÉPLOYÉ (temps 1 c981468 et temps 2 373e7a0 sur main, 24/10/2026), contrôles en
   production terminés (2e passage compris) — voir la section « Module Absences ».
-- Relances automatiques des factures : PRÉPARÉES sur la branche `preparation-relances` (25/10/2026), essais locaux seulement ;
-  NON déployées, NON activées (aucun envoi réel, aucun secret saisi, aucun Cron, aucune extension installée) — voir la
-  section « Relances automatiques ».
+- Relances automatiques des factures : TEMPS 1 FAIT (migration 20261029100000, commit 7bd9873 sur main, 25/10/2026) ;
+  temps 2 (écrans, envois désactivés) PRÉPARÉ : commit ad63f4d (branche deploiement-relances-t2), NON publié ; NON activées
+  (aucun envoi réel, aucun secret saisi, aucun Cron, aucune extension installée) — voir « Relances automatiques ».
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
 - RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (24/10/2026) : module RH et correctif 20261026100000.
@@ -576,7 +576,22 @@ livraison reçus durablement) — voir « Relances automatiques ».
   `essais_stockage_absences.mjs` entièrement réussis. Après le temps 2 : `parcours_absences_en_ligne.mjs` (puis sa 2e phase
   ≥ 1 h plus tard), `instantane_complet.py`. Chaque temps sur accord explicite de l'utilisateur.
 
-## Relances automatiques des factures (migration 20261029100000) — PRÉPARÉ (branche preparation-relances), NON DÉPLOYÉ
+## Relances automatiques des factures (migration 20261029100000) — TEMPS 1 FAIT (25/10/2026) ; écrans non publiés, non activé
+- TEMPS 1 FAIT (accord de l'utilisateur, 25/10/2026) : commit 7bd9873 poussé sur main en avance rapide (parent 373e7a0 = main ;
+  1 fichier ; md5 48b0c11051f7aceb92ac60709578417d = version testée ; aucun secret ; aucune ancienne migration). Vérifié avant :
+  champs compte_fournisseur (texte, `^[A-Za-z0-9._-]{3,64}$`, vide tant que jamais tentée ; NOT NULL dans relances_evenements) et
+  alerte (texte ≤ 300) conformes. Photo complète avant (instantane_complet, instantane : 11 migrations, 0 facture, 0 relance,
+  0 résidu, 1 compte). Après : Supabase Preview vert et Vercel vert ; appliquée en ~1 min ; 12 migrations (autotest passé en
+  production) ; nouvelles colonnes de relances et 14e table présentes et vides ; tests_verrouillage 450/450 (14 tables,
+  contrôles 4d) ; écrans en ligne (ancienne version) : Utilisateurs 45/45, RH 50/50, Commercial 57/57, Finance 53/53
+  (nettoyage des essais remplacé par la migration), Absences 59/59 puis 2e phase 5/5 (≈ 64 min après) ; instantane_complet :
+  19/19 identiques, seul changement prévu « table relances_evenements » absente → 0 ligne ; instantane : 0 résidu, 0 compteur,
+  bucket justificatifs vide. Navigateur Commercial « limite » refait en LOCAL : 2/2 (brouillon local complet : adresse, TVA MQ,
+  ligne ; compteur de la base d'essai à 9 999, inchangé ; compteur réel jamais touché).
+- TEMPS 2 PRÉPARÉ : commit ad63f4d (branche deploiement-relances-t2, parent 7bd9873 = main) = arbre identique à
+  preparation-relances (écrans Relances, routes, tests, documentation), AUCUN fichier supabase/. Envois désactivés : sans les
+  variables RELANCES_ACTIVES, RESEND_API_KEY, RELANCES_SECRET_CRON, RESEND_WEBHOOK_SECRET, RESEND_COMPTE_REFERENCE, rien
+  n'est réservé ni envoyé et les deux routes répondent 401. À publier seulement sur accord.
 - Relances automatiques : diagnostic en LECTURE SEULE seulement (25/10/2026) : aucun envoi d'email dans le code, aucune
   dépendance d'email, aucune route d'API, aucun vercel.json ni workflow GitHub (donc aucun Cron côté code) ; table relances
   vide ; pg_cron, pg_net, SMTP, Edge Functions et Cron Vercel à constater dans les tableaux de bord. Aucune implémentation,
