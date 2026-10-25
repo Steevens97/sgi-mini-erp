@@ -477,6 +477,11 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   dépendance d'email, aucune route d'API, aucun vercel.json ni workflow GitHub (donc aucun Cron côté code) ; table relances
   vide ; pg_cron, pg_net, SMTP, Edge Functions et Cron Vercel à constater dans les tableaux de bord. Aucune implémentation,
   aucun email, aucune modification de la base, aucun Cron sans accord.
+- Résultat du diagnostic exécuté par l'utilisateur (25/10/2026) : pg_cron 1.6.4 et pg_net 0.20.4 disponibles NON installés ;
+  Vault 0.3.1 installé, 0 secret ; aucune tâche Cron, aucun webhook, aucune fonction réseau ; relances : 0 ligne, colonnes et
+  contraintes identiques au socle simulé (pas de contrainte sur canal) ; 0 facture échue impayée. Plan des relances (Resend,
+  Supabase Cron + Vault) validé comme base ; date_envoi facultative approuvée ; domaine, expéditeur, calendrier, textes,
+  destinataire de test et suivi de livraison : en attente des réponses de l'utilisateur. Aucune implémentation autorisée.
 - TEMPS 2 FAIT (accord de l'utilisateur, 24/10/2026) : commit 373e7a0 sur main (parent c981468 ; contenu = branche testée,
   0 migration, 0 secret). Vercel vert, Supabase Preview vert, toujours 11 migrations. Parcours en ligne
   `parcours_absences_en_ligne.mjs` 59/59 (soldes à renseigner, confirmation à 0, droits du manager, refus
