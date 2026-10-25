@@ -682,6 +682,18 @@ livraison reçus durablement) — voir « Relances automatiques ».
 - Second passage local (25/10/2026, journée) : tests_relances.sql 129/129, essais_relances_locaux.mjs 44/44, sabotages 20/20 ;
   Absences SQL 197/197 et API 95/95 de jour ET le soir (horloge simulée), avec et sans la migration ; navigateur Absences
   76/76 de jour et le soir simulé, avec et sans la migration ; toute la non-régression identique (voir ci-dessus).
+- Passage local avec la 14e table (25/10/2026, journée) : migration md5 48b0c11051f7aceb92ac60709578417d ; tests_relances.sql
+  167/167 ; tests_concurrence_relances.sh 17/17 (sans le verrou de l'identifiant : 15/17) ; test_sabotages_relances.sh 28/28 ;
+  essais_relances_locaux.mjs 52/52 ; test_relances_martinique.sh 6 instants × 5/5 ; tests_relances_module 18/18 ;
+  tests_verrouillage.py 449/449 avec la migration (14 tables), 353/353 sans. Non-régression avec ET sans la migration : Commercial
+  135/135 et 30/30, RH 155/155 et 28/28, Finance 118/118 et 88/88, Absences 197/197 et 95/95, compatibilité Utilisateurs 17/17 ;
+  concurrence Commercial 17/17 (après tests_commercial.sql), RH 5/5 (après tests_rh.sql), Finance 15/15, Absences 16/16 (après
+  tests_absences.sql) ; numérotation piégée ; temps existants 8/8 ; passage d'année Commercial et Finance 6/6 ; Absences horloge
+  6/6 × 3 ; PDF 14/14, 19/19 (après tests_finance.sql), justificatifs 22/22 ; navigateur Absences 76/76, Commercial 26/26 et réel
+  4/4, RH 49/49, taux 7/7, Finance 54/54 et 21/21, stockage 29/29 ; répétitions Utilisateurs 45/45, RH 50/50, Finance 53/53,
+  Commercial 57/57, Absences 59/59. NON refait : navigateur Commercial « limite » (préparation : brouillon réel avec traitement
+  de TVA, compteur à 9 999 ; la limite reste couverte par tests_commercial.sql) ; Absences le soir (non concerné par ce changement).
+  Commit temps 1 proposé : 7bd9873 (branche deploiement-relances-t1-durable, parent 373e7a0 = main), migration seule, NON fusionné.
 - Limites connues : présence des étiquettes dans les événements du fournisseur non vérifiée (repli par identifiant) ; file
   interne de pg_net (en-têtes) à examiner à l'activation ; quota gratuit de 100 emails/jour non suivi par l'application ;
   date_envoi d'une acceptation obtenue lors d'une reprise = heure de cette réponse (prudent) ; changement de compte pendant une
