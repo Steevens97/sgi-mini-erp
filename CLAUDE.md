@@ -641,9 +641,17 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   17/17, 30/30, PDF 14/14, numérotation piégée, passage d'année ; RH 155/155, 28/28, 5/5, 8/8 ; Finance 118/118 (avec et sans
   la migration ; tests_finance.sql adapté : une relance ne s'écrit plus directement), 88/88, 15/15, 6/6, PDF 19/19 ; Absences
   197/197 et 95/95 (horloge simulée de jour, voir « Tests locaux »), 16/16, 22/22, 6/6 × 3 ; compatibilité Utilisateurs 17/17
-  avec et sans ; navigateur Commercial 26/26 et réel 4/4, RH 49/49, taux 7/7, Finance 54/54 et 21/21, Absences 75/76 (essai
-  fait le soir : échec identique SANS la migration ; non rejoué de jour) ; répétitions locales Utilisateurs 45/45, Commercial 57/57, RH 50/50, Finance
+  avec et sans ; navigateur Commercial 26/26 et réel 4/4, RH 49/49, taux 7/7, Finance 54/54 et 21/21, Absences 76/76 (de jour et le
+  soir simulé, avec et sans la migration, après la correction des dates des scripts) ; répétitions locales Utilisateurs 45/45, Commercial 57/57, RH 50/50, Finance
   53/53, Absences 59/59, stockage 29/29.
+- Événement de livraison SANS étiquette arrivé avant l'enregistrement de l'identifiant (corrigé le 25/10/2026, migration encore
+  jamais appliquée) : « en_attente » si une relance tentée depuis moins de 28 h attend son identifiant ; rien n'est écrit ; la
+  route répond 503 ; le fournisseur le renvoie (même svix-id ; renvois immédiat, 5 s, 5 min, 30 min, 2 h, 5 h, 10 h, 10 h) et il
+  est rapproché ; au-delà de 28 h : ignoré (pas de refus sans fin : Resend désactive une adresse qui échoue en continu).
+  Alternative non retenue (demanderait une table) : conserver nous-mêmes les événements non rapprochés.
+- Second passage local (25/10/2026, journée) : tests_relances.sql 129/129, essais_relances_locaux.mjs 44/44, sabotages 20/20 ;
+  Absences SQL 197/197 et API 95/95 de jour ET le soir (horloge simulée), avec et sans la migration ; navigateur Absences
+  76/76 de jour et le soir simulé, avec et sans la migration ; toute la non-régression identique (voir ci-dessus).
 - Limites connues : présence des étiquettes dans les événements du fournisseur non vérifiée (repli par identifiant) ; file
   interne de pg_net (en-têtes) à examiner à l'activation ; quota gratuit de 100 emails/jour non suivi par l'application ;
   date_envoi d'une acceptation obtenue lors d'une reprise = heure de cette réponse (prudent) ; changement de clé pendant une
@@ -664,7 +672,10 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   le port 3200, lu dans /proc ; `ss` n'existe pas ici ; le pid de `setsid` désigne un intermédiaire déjà terminé).
   Toujours arrêter la pile locale (`pile_locale.sh stop`) avant `rejouer.sh` (sinon la base reste ouverte et rien n'est rejoué).
 - `.env.local` est régénéré depuis les variables d'environnement de la session (jamais commité).
-- Heure des tests : `tests_absences.sql` et les données de démonstration du socle utilisent `current_date` (UTC) alors que les
-  attentes sont en date de Martinique : entre 20 h et minuit en Martinique, tests_absences.sql s'arrête (104/108) et le
-  navigateur Absences donne 75/76 — défaut des SCRIPTS (l'application est cohérente), constaté le 25/10/2026, non corrigé
-  (autre module). Les rejouer de jour, ou sur la grappe à horloge simulée (port 5498).
+- Heure des tests : données de test TOUJOURS en date de Martinique (jamais current_date = UTC). Corrigé le 25/10/2026
+  (accord de l'utilisateur ; scripts seulement, aucune règle ni contrôle modifié) : tests_absences.sql (abse.j), temps de
+  démonstration du socle, tests_concurrence_absences.sh. Les valeurs par défaut des colonnes et prochain_numero du socle
+  restent la copie EXACTE de la base réelle. Avant : 104/108 et navigateur 75/76 entre 20 h et minuit (contre-épreuve refaite).
+- Soirée simulée pour le NAVIGATEUR : PostgREST (binaire statique) garde l'horloge réelle et refuse un jeton « émis dans le
+  futur » (JWTIssuedAtFuture) → décaler EN ARRIÈRE (FAKETIME='-9h' : base 5499, passerelle avec PASSERELLE_DUREE_JETON=86400,
+  serveur Next), jamais en avant.
