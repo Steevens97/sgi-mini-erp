@@ -481,7 +481,16 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Vault 0.3.1 installé, 0 secret ; aucune tâche Cron, aucun webhook, aucune fonction réseau ; relances : 0 ligne, colonnes et
   contraintes identiques au socle simulé (pas de contrainte sur canal) ; 0 facture échue impayée. Plan des relances (Resend,
   Supabase Cron + Vault) validé comme base ; date_envoi facultative approuvée ; domaine, expéditeur, calendrier, textes,
-  destinataire de test et suivi de livraison : en attente des réponses de l'utilisateur. Aucune implémentation autorisée.
+  destinataire de test et suivi de livraison : voir décisions ci-dessous. Aucune implémentation autorisée.
+- Décisions de l'utilisateur pour les relances (25/10/2026, ne plus les redemander) : AUCUN domaine pour le moment, aucun achat ;
+  factures seulement (émises/envoyées, impayées, échues) ; J+7, J+15, J+30, au moins 8 jours entre deux relances ACCEPTÉES,
+  au plus une par facture et par jour (Martinique) ; lundi–vendredi 8 h–17 h Martinique, jours fériés non exclus (limite
+  affichée) ; les 3 textes proposés validés (aucune pénalité ni menace) ; PDF archivé joint après contrôle d'empreinte ;
+  suivi de livraison OUI (rejet définitif = blocage) ; Resend + Supabase Cron + Vault ; envoi entièrement automatique
+  seulement après essais et accord d'activation ; date_envoi facultative, remplie à l'acceptation ou constat admin tracé ;
+  aucun secret dans requete_fournisseur, historiques, journaux, commandes Cron, migrations ou URL. Adresse de test et
+  signature : à confirmer par l'utilisateur (n'en choisir aucune). Ne rien reprendre de la fiche INSEE « SG-INGENIERIE »
+  (autre entreprise).
 - TEMPS 2 FAIT (accord de l'utilisateur, 24/10/2026) : commit 373e7a0 sur main (parent c981468 ; contenu = branche testée,
   0 migration, 0 secret). Vercel vert, Supabase Preview vert, toujours 11 migrations. Parcours en ligne
   `parcours_absences_en_ligne.mjs` 59/59 (soldes à renseigner, confirmation à 0, droits du manager, refus
