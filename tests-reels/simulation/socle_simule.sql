@@ -229,7 +229,8 @@ insert into public.projets (nom, client_id) values ('Projet démo 1','33333333-3
 update public.collaborateurs set manager_id = '22222222-2222-2222-2222-222222222222'
  where id in ('22222222-2222-2222-2222-222222222221', '22222222-2222-2222-2222-222222222223');
 insert into public.temps (collaborateur_id, projet_id, date_saisie, heures, statut)
-select '22222222-2222-2222-2222-222222222221'::uuid, id, current_date - 5, 6.5, 'valide' from public.projets where nom = 'Projet démo 1'
-union all select '22222222-2222-2222-2222-222222222221', id, current_date - 4, 7, 'valide' from public.projets where nom = 'Projet démo 1'
-union all select '22222222-2222-2222-2222-222222222223', id, current_date - 3, 4, 'soumis' from public.projets where nom = 'Projet démo 2';
+-- Dates des temps de démonstration : date de Martinique (comme l'application), pas current_date (UTC).
+select '22222222-2222-2222-2222-222222222221'::uuid, id, (now() at time zone 'America/Martinique')::date - 5, 6.5, 'valide' from public.projets where nom = 'Projet démo 1'
+union all select '22222222-2222-2222-2222-222222222221', id, (now() at time zone 'America/Martinique')::date - 4, 7, 'valide' from public.projets where nom = 'Projet démo 1'
+union all select '22222222-2222-2222-2222-222222222223', id, (now() at time zone 'America/Martinique')::date - 3, 4, 'soumis' from public.projets where nom = 'Projet démo 2';
 insert into auth.users (id, email) values ('11111111-1111-1111-1111-111111111111','sgi@gmx.fr');

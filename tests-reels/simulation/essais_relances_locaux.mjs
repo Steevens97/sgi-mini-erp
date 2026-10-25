@@ -47,6 +47,14 @@ async function demander(url, options) {
 }
 const executer = (auth = `Bearer ${SECRET}`, methode = "POST") =>
   demander(`${B}/api/relances/executer`, { method: methode, redirect: "manual", headers: auth ? { Authorization: auth } : {} });
+// Événement de livraison signé comme le fait le fournisseur (format Svix), SANS étiquette de relance.
+function evenementSansEtiquette(id, type, emailId, quand) {
+  const corps = JSON.stringify({ type, created_at: quand, data: { email_id: emailId } });
+  const t = Math.floor(Date.now() / 1000);
+  const sig = createHmac("sha256", Buffer.from(WHSEC.slice(6), "base64")).update(`${id}.${t}.${corps}`).digest("base64");
+  return demander(`${B}/api/relances/livraison`, { method: "POST", body: corps,
+    headers: { "svix-id": id, "svix-timestamp": String(t), "svix-signature": `v1,${sig}`, "Content-Type": "application/json" } });
+}
 const relance = (num) => JSON.parse(sql(`select coalesce((select row_to_json(r) from (select r.* from public.relances r
   join public.factures f on f.id = r.facture_id where f.numero = '${num}' order by r.created_at desc limit 1) r), '{}')`));
 
@@ -136,9 +144,23 @@ try {
   await executer();
   let re = relance("ESSAI-FAC-2026-0205");
   verifier("réponse perdue : « envoi non confirmé », AUCUNE date d'envoi", re.statut === "en_cours" && re.date_envoi === null && re.tentatives === 1, re.erreur);
+  // L'imitation a accepté l'email : son identifiant existe chez le fournisseur, pas encore dans la base. Événement sans
+  // étiquette, envoyé maintenant : refusé « en attente » (503) pour être renvoyé ; rien n'est écrit.
+  const idPerdu = (await etat()).emails.find((x) => x.cle === `sgi-relance-${re.id}`).id;
+  let rp = await evenementSansEtiquette("msg_precoce", "email.delivered", idPerdu, "2026-11-02T19:00:20Z");
+  const corpsPrecoce = await rp.json();
+  verifier("événement sans étiquette avant l'enregistrement de l'identifiant : 503 « en attente », rien écrit",
+    rp.status === 503 && corpsPrecoce.resultat === "en_attente" && relance("ESSAI-FAC-2026-0205").livre_le === null
+    && relance("ESSAI-FAC-2026-0205").fournisseur_id === null, `HTTP ${rp.status}`);
   await modeImitation("normal");
   horloge("2026-11-02 19:11:00+00");
   await executer();
+  rp = await evenementSansEtiquette("msg_precoce", "email.delivered", idPerdu, "2026-11-02T19:00:20Z");
+  verifier("même événement renvoyé après l'enregistrement : rapproché (livre_le)", rp.status === 200
+    && (await rp.json()).resultat === "enregistre" && relance("ESSAI-FAC-2026-0205").livre_le?.startsWith("2026-11-02T19:00:20"));
+  rp = await evenementSansEtiquette("msg_precoce", "email.delivered", idPerdu, "2026-11-02T19:00:20Z");
+  verifier("renvoyé encore une fois : « déjà », un seul événement dans l'historique", (await rp.json()).resultat === "deja"
+    && relance("ESSAI-FAC-2026-0205").historique.filter((e) => e.evenement_id === "msg_precoce").length === 1);
   re = relance("ESSAI-FAC-2026-0205");
   e = await etat();
   const demE = e.demandes.filter((d) => d.cle === `sgi-relance-${re.id}`);
@@ -208,7 +230,8 @@ try {
   await evenement("msg_3", "email.delivered", re.fournisseur_id, "2026-11-02T19:13:00Z");
   const reb = relance("ESSAI-FAC-2026-0205");
   verifier("rejet définitif puis livraison tardive : « rejetée », motif conservé, rien effacé",
-    reb.statut === "rejetee" && reb.rebond_motif === "Mailbox does not exist" && reb.livre_le === null);
+    reb.statut === "rejetee" && reb.rebond_motif === "Mailbox does not exist"
+    && reb.livre_le?.startsWith("2026-11-02T19:00:20"));   // livraison antérieure conservée, la tardive (19 h 13) ignorée
 
   console.log("== Écran (administrateur) : simulation sans envoi, résolution");
   await facture("ESSAI-FAC-2026-0209", 12);

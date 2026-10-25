@@ -13,7 +13,7 @@ HUGO=22222222-2222-2222-2222-2222222222c2
 j() { q -c "select (now() at time zone 'America/Martinique')::date + $1"; }
 T=/var/tmp/pg-essai/concurrence_abs; mkdir -p $T
 # Karim devient le manager de Hugo : deux valideurs distincts (Karim, admin) peuvent agir en même temps.
-q -c "update public.collaborateurs set manager_id = '22222222-2222-2222-2222-2222222222c1', date_entree = current_date - 30 where id = '$HUGO'"
+q -c "update public.collaborateurs set manager_id = '22222222-2222-2222-2222-2222222222c1', date_entree = (now() at time zone 'America/Martinique')::date - 30 where id = '$HUGO'"
 # Nouvelle fiche : solde à 0 « à renseigner » ; l'admin le confirme à 25 jours avant les essais de validation.
 q -c "set role service_role; select public.abs_ajuster_solde('$ADMIN', '$HUGO', 'conges_payes', (select solde_conges from public.collaborateurs where id = '$HUGO'), 25, 'Essai de concurrence')" >/dev/null
 demande() { # debut fin apres_midi fin_midi jours pause

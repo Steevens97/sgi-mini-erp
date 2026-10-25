@@ -57,6 +57,7 @@ saboter "version inconnue de supprimer_essais_finance écrasée" "is distinct fr
 saboter "demande figée modifiable" "     is distinct from
      (old.id, old.facture_id, old.rang, old.jour_relance, old.essai, old.destinataire, old.objet, old.message, old.canal," "     is distinct from
      (new.id, new.facture_id, new.rang, new.jour_relance, new.essai, new.destinataire, new.objet, new.message, new.canal," "demande figée modifiée"
+saboter "événement précoce sans étiquette déclaré « inconnu » (perdu)" "      return jsonb_build_object('resultat', 'en_attente');" "      return jsonb_build_object('resultat', 'inconnu');" "événement précoce sans étiquette mal traité"
 cp "$SAUVE" "$M"
 bash "$R/tests-reels/simulation/rejouer.sh" >/dev/null 2>&1 && echo "  migration d'origine remise en place et appliquée"
 echo "BILAN : $OKS/$TOTAL sabotages arrêtés"
