@@ -1,14 +1,14 @@
 // Préparation EN PRODUCTION de l'UNIQUE facture d'ESSAI du premier essai de relance (accord de l'utilisateur, 25/10/2026).
 // Données jetables seulement : prospect/devis/client/projet d'ESSAI, une fiche jetable, un temps validé, compte admin jetable
-// (supprimé à la fin). Facture ESSAI-FAC (compteur d'essai), PDF filigrané « ESSAI — SANS VALEUR », délai de paiement 1 jour.
-// La facture est émise par la fonction de service de la base (finance_emettre_facture, clé secrète) — l'écran impose
-// 30 jours aux essais —, avec les coordonnées et conditions [DÉMO] ; la base applique toutes ses règles. Le PDF est
-// généré et archivé par le site (bouton « Générer / reprendre le PDF »).
+// (supprimé à la fin). Facture ESSAI-FAC (compteur d'essai), PDF filigrané « ESSAI — SANS VALEUR ».
+// La facture est émise PAR L'ÉCRAN « Nouvelle facture » (fonctionnement existant : conditions de démonstration du site,
+// délai de paiement de 30 jours, PDF archivé par le site à l'émission). Les prérequis (mode, tarif, temps validé) passent
+// par les mêmes fonctions de service que les écrans.
 // AUCUN email, aucune réservation de relance, aucun Cron. Les données créées sont CONSERVÉES VOLONTAIREMENT jusqu'à
 // l'essai ; leur liste est écrite dans le fichier d'état passé en 2e argument, lu par nettoyer_essai_relances.mjs.
 // Usage : NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt node preparer_facture_essai_relances.mjs <url> <etat.json>
 import { chromium } from "playwright";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 
 const B = process.argv[2] ?? "https://sgi-mini-erp.vercel.app";
@@ -31,15 +31,10 @@ const attendre = async (fn, essais = 60) => { for (let i = 0; i < essais; i++) {
 const AUJ = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Martinique" }).format(new Date());
 const [an, mo] = AUJ.split("-").map(Number);
 const MOIS = mo === 1 ? `${an - 1}-12` : `${an}-${String(mo - 1).padStart(2, "0")}`;
-// Coordonnées et conditions de DÉMONSTRATION (copie de COORDONNEES_DEMO / CONDITIONS_DEMO de src/lib/entreprise.ts),
-// délai de paiement ramené à 1 jour pour cet essai.
+// Coordonnées de DÉMONSTRATION du devis d'essai (copie de COORDONNEES_DEMO de src/lib/entreprise.ts).
 const EMETTEUR_DEVIS = { raison_sociale: "[DÉMO] SG Ingénierie", forme_juridique: "SAS", capital_social: "[DÉMO]", adresse: "[DÉMO] adresse",
   code_postal: "97200", ville: "Fort-de-France", siret: "00000000000000", immatriculation: "[DÉMO] immatriculation", tva_intracom: "[DÉMO]",
   validite_jours: "30", telephone: "", email: "", conditions_paiement: "", obligation_assurance: "non_requise" };
-const EMETTEUR_FACTURE = Object.fromEntries(["raison_sociale", "forme_juridique", "capital_social", "adresse", "code_postal", "ville",
-  "siret", "immatriculation", "tva_intracom", "telephone", "email"].map((c) => [c, EMETTEUR_DEVIS[c]]));
-const CONDITIONS = { delai_paiement_jours: "1", penalites_retard: "[DÉMO] pénalités de retard",
-  indemnite_recouvrement: "[DÉMO] indemnité de recouvrement", escompte: "[DÉMO] escompte" };
 const TVA = { regime: "taxable", territoire: "MQ", pays: null, taux: 8.5, mention: null,
   criteres: { nature_mission: "prestation_intellectuelle", statut_client: "assujetti_france" } };
 
@@ -100,25 +95,26 @@ try {
   await rpc("finance_confirmer_tarif", { p_auteur: A.id, p_projet: PE.id, p_tarif: 100, p_date_effet: `${MOIS}-01`,
     p_reference: "Essai relances", p_empreinte_temps: concernes.empreinte });
 
-  console.log("== 4. Émission de la facture d'ESSAI (délai de paiement 1 jour) et PDF");
+  console.log("== 4. Émission de la facture d'ESSAI par l'écran « Nouvelle facture » (conditions normales du site) et PDF");
   const calc = await rpc("finance_calculer", { p_client: PE.client_id, p_mois: `${MOIS}-01`, p_projets: [PE.id], p_tva: TVA });
-  verifier("aperçu : facture d'ESSAI, 100,00 € HT, 108,50 € TTC", calc.essai === true && Number(calc.totaux?.total_ht) === 100
-    && Number(calc.totaux?.total_ttc) === 108.5, JSON.stringify(calc.totaux));
-  const em = await rpc("finance_emettre_facture", { p_auteur: A.id, p_cle_emission: randomUUID(), p_client: PE.client_id, p_mois: `${MOIS}-01`,
-    p_projets: [PE.id], p_tva: TVA, p_empreinte: calc.empreinte, p_emetteur: EMETTEUR_FACTURE, p_conditions: CONDITIONS, p_gabarit: "facture-v1" });
-  etat.facture = em.facture_id; ecrire();
-  await page.goto(`${B}/finance/factures/${etat.facture}`);
-  await page.click("button:has-text('Générer / reprendre le PDF')");
+  verifier("aperçu : facture d'ESSAI, 100,00 € HT, 108,50 € TTC, aucun blocage", calc.essai === true && Number(calc.totaux?.total_ht) === 100
+    && Number(calc.totaux?.total_ttc) === 108.5 && !(calc.blocages ?? []).length, JSON.stringify(calc.totaux));
+  await page.goto(`${B}/finance/nouvelle?client_id=${PE.client_id}&mois=${MOIS}&projet_id=${PE.id}&regime_tva=taxable&territoire_tva=MQ`
+    + `&taux_tva=8.5&nature_mission=prestation_intellectuelle&statut_client=assujetti_france&apercu=1`);
+  await page.locator("button:has-text(\"Émettre la facture d'essai\")").click();
+  await page.waitForURL(/\/finance\/factures\//, { timeout: 60000 });
+  etat.facture = page.url().split("/").pop().split("?")[0]; ecrire();
   verifier("PDF de la facture d'essai archivé par le site", await attendre(async () =>
     (await un(`/rest/v1/factures?id=eq.${etat.facture}&select=pdf_statut`))?.pdf_statut === "disponible"));
+  verifier("une seule facture émise", (await api("GET", "/rest/v1/factures?select=id")).length === 1);
   const f = await un(`/rest/v1/factures?id=eq.${etat.facture}&select=numero,essai,statut,date_emission,date_echeance,total_ttc,pdf_chemin,pdf_empreinte`);
   etat.pdf_facture = f.pdf_chemin; etat.numero = f.numero; etat.date_emission = f.date_emission; etat.date_echeance = f.date_echeance; ecrire();
   const tel = await page.request.get(`${B}/finance/factures/${etat.facture}/pdf`);
   const pdf = await tel.body();
   verifier("PDF téléchargé = PDF archivé (SHA-256)", tel.status() === 200 && createHash("sha256").update(pdf).digest("hex") === f.pdf_empreinte);
   verifier("facture d'ESSAI émise, statut « émise »", f.essai && f.statut === "emise" && f.numero.startsWith(`ESSAI-FAC-${AUJ.slice(0, 4)}-`), f.numero);
-  const echeanceAttendue = new Date(Date.parse(`${AUJ}T12:00:00Z`) + 86400000).toISOString().slice(0, 10);
-  verifier("dates : émission = aujourd'hui (Martinique), échéance = lendemain", f.date_emission === AUJ && f.date_echeance === echeanceAttendue,
+  const echeanceAttendue = new Date(Date.parse(`${AUJ}T12:00:00Z`) + 30 * 86400000).toISOString().slice(0, 10);
+  verifier("dates : émission = aujourd'hui (Martinique), échéance = émission + 30 jours", f.date_emission === AUJ && f.date_echeance === echeanceAttendue,
     `${f.date_emission} → ${f.date_echeance}`);
   verifier("compteurs : essai seulement, aucun compteur réel", JSON.stringify((await api("GET", "/rest/v1/compteurs?select=cle,valeur&cle=like.*facture*")))
     === JSON.stringify([{ cle: `essai_facture_${AUJ.slice(0, 4)}`, valeur: 1 }]));
