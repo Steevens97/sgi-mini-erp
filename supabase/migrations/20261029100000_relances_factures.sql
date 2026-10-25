@@ -749,9 +749,12 @@ begin
 end
 $$;
 
--- 5e. Événements de livraison (webhook signé, vérifié par la route). Recherchés par l'identifiant de l'email, ou par
---     l'étiquette de la relance si l'identifiant n'a jamais été enregistré (arrêt après acceptation). Un événement
---     déjà reçu est ignoré ; aucun ne fait régresser un état ; un rejet définitif n'est jamais effacé.
+-- 5e. Événements de livraison (webhook signé, vérifié par la route). Recherchés par l'étiquette de la relance, sinon par
+--     l'identifiant de l'email. Un événement déjà reçu est ignoré ; aucun ne fait régresser un état ; un rejet définitif
+--     n'est jamais effacé. Événement impossible à rapprocher ALORS qu'une relance tentée attend encore son identifiant
+--     (réponse du fournisseur pas encore enregistrée) : « en_attente », rien n'est écrit ; la route répond 503 et le
+--     fournisseur le RENVOIE (même identifiant d'événement), rapproché dès l'enregistrement de l'identifiant. Limité aux
+--     relances tentées depuis moins de 28 h (durée des renvois) ; au-delà, l'événement est ignoré (jamais de refus sans fin).
 create or replace function public.relances_evenement_livraison(p_evenement_id text, p_type text, p_fournisseur_id text,
   p_relance uuid, p_survenu_le timestamptz, p_detail text)
 returns jsonb
@@ -782,6 +785,12 @@ begin
     select * into v from public.relances where fournisseur_id = p_fournisseur_id for update;
   end if;
   if v.id is null then
+    -- Seulement pendant la durée des renvois du fournisseur (≈ 27 h 30 ; 28 h) : jamais de refus sans fin.
+    if exists (select 1 from public.relances r where r.fournisseur_id is null and r.tentatives > 0
+                 and r.statut in ('en_cours', 'a_verifier')
+                 and r.derniere_tentative_le > public.relances_maintenant() - interval '28 hours') then
+      return jsonb_build_object('resultat', 'en_attente');
+    end if;
     return jsonb_build_object('resultat', 'inconnu');
   end if;
   if exists (select 1 from jsonb_array_elements(v.historique) e where e ->> 'evenement_id' = p_evenement_id) then
@@ -1273,7 +1282,20 @@ begin
     if v_res ->> 'action' is distinct from 'envoyer' or v_res ->> 'requete_texte' is distinct from v_req::text then
       raise exception 'AUTOTEST: reprise sans la demande figée (%)', v_res;
     end if;
+    -- Événement SANS étiquette arrivé avant l'enregistrement de l'identifiant : « en attente », rien d'écrit.
+    v_res := public.relances_evenement_livraison('evt-0', 'email.delivered', 'email-autotest-1', null, v_lundi + interval '18 hours', null);
+    if v_res ->> 'resultat' is distinct from 'en_attente'
+       or coalesce((select fournisseur_id is not null or livre_le is not null or jsonb_array_length(historique) <> 3
+                      from public.relances where id = v_r1), true) then
+      raise exception 'AUTOTEST: événement précoce sans étiquette mal traité (%)', v_res;
+    end if;
     v_res := public.relances_resultat(v_r1, 2, 'acceptee', 'email-autotest-1', null);
+    -- Le même événement, renvoyé par le fournisseur après l'enregistrement : rapproché.
+    v_res := public.relances_evenement_livraison('evt-0', 'email.delivered', 'email-autotest-1', null, v_lundi + interval '18 hours', null);
+    if v_res ->> 'resultat' is distinct from 'enregistre'
+       or coalesce((select livre_le is distinct from v_lundi + interval '18 hours' from public.relances where id = v_r1), true) then
+      raise exception 'AUTOTEST: événement renvoyé non rapproché (%)', v_res;
+    end if;
     -- Acceptée aujourd'hui (mardi) : aucune autre relance de cette facture aujourd'hui, et 8 jours d'écart.
     if coalesce((select date_envoi is distinct from v_lundi + interval '18 hours' or statut is distinct from 'acceptee'
                    from public.relances where id = v_r1), true) then
@@ -1317,8 +1339,8 @@ begin
     perform public.relances_evenement_livraison('evt-2', 'email.delivered', 'email-autotest-1', null, v_lundi + interval '18 hours', null);
     perform public.relances_evenement_livraison('evt-1', 'email.bounced', 'email-autotest-1', null, v_lundi + interval '18 hours 1 minute', 'Boîte inexistante');
     perform public.relances_evenement_livraison('evt-3', 'email.sent', 'email-autotest-1', null, v_lundi + interval '18 hours', null);
-    if coalesce((select statut is distinct from 'rejetee' or livre_le is not null or rebond_le is null
-              or (select count(*) from jsonb_array_elements(historique) e where e ->> 'action' = 'evenement') <> 3
+    if coalesce((select statut is distinct from 'rejetee' or livre_le is distinct from v_lundi + interval '18 hours' or rebond_le is null
+              or (select count(*) from jsonb_array_elements(historique) e where e ->> 'action' = 'evenement') <> 4
           from public.relances where id = v_r1), true) then
       raise exception 'AUTOTEST: événements de livraison mal traités';
     end if;
