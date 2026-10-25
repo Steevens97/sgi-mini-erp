@@ -588,6 +588,9 @@ livraison reçus durablement) — voir « Relances automatiques ».
   19/19 identiques, seul changement prévu « table relances_evenements » absente → 0 ligne ; instantane : 0 résidu, 0 compteur,
   bucket justificatifs vide. Navigateur Commercial « limite » refait en LOCAL : 2/2 (brouillon local complet : adresse, TVA MQ,
   ligne ; compteur de la base d'essai à 9 999, inchangé ; compteur réel jamais touché).
+- DESTINATAIRE DU PREMIER ESSAI (autorisé par l'utilisateur le 25/10/2026) : sgi.bet.wi@gmail.com = adresse du compte Resend
+  (inscription par GitHub ; sans domaine vérifié, onboarding@resend.dev n'envoie QU'À l'adresse du compte), UNIQUE destinataire,
+  facture d'ESSAI uniquement. L'envoi lui-même attend un accord explicite séparé ; aucun envoi aux clients, aucun Cron.
 - TEMPS 2 PRÉPARÉ : branche deploiement-relances-t2 (un seul commit, parent 7bd9873 = main) = arbre identique à
   preparation-relances (écrans Relances, routes, tests, documentation), AUCUN fichier supabase/. Envois désactivés : sans les
   variables RELANCES_ACTIVES, RESEND_API_KEY, RELANCES_SECRET_CRON, RESEND_WEBHOOK_SECRET, RESEND_COMPTE_REFERENCE, rien
