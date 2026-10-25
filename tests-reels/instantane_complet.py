@@ -1,10 +1,10 @@
 """Empreinte COMPLÈTE des données réelles, sans rien exclure (éléments d'essai compris).
 13 tables (colonnes d'origine uniquement, pour comparer avant/après une migration qui ajoute des
-colonnes), comptes d'authentification, espaces de stockage et leurs fichiers. Lecture seule.
+colonnes), la 14e table relances_evenements quand elle existe (toutes ses colonnes ; « absente » sinon), comptes d'authentification, espaces de stockage et leurs fichiers. Lecture seule.
 Les valeurs ne sont jamais affichées (taux horaires compris) : seulement des nombres et des empreintes.
 Usage : python3 -I tests-reels/instantane_complet.py <fichier.json> [<fichier_avant.json> pour comparer]
 """
-import hashlib, json, os, ssl, sys, urllib.request
+import hashlib, json, os, ssl, sys, urllib.error, urllib.request
 
 U = os.environ["NEXT_PUBLIC_SUPABASE_URL"]; S = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 CTX = ssl.create_default_context(cafile="/root/.ccr/ca-bundle.crt")
@@ -40,6 +40,14 @@ res = {}
 for t, cols in COLONNES.items():
     lignes = get(f"/rest/v1/{t}?select={cols}")
     res[f"table {t}"] = [len(lignes), empreinte(lignes)]
+# 14e table (module Relances, migration 20261029100000) : relevée en entier si elle existe, sinon « absente ».
+try:
+    lignes = get("/rest/v1/relances_evenements?select=*")
+    res["table relances_evenements"] = [len(lignes), empreinte(lignes)]
+except urllib.error.HTTPError as e:
+    if e.code != 404:
+        raise
+    res["table relances_evenements"] = [0, "absente"]
 comptes = [{"id": u["id"], "email": u["email"], "banni": u.get("banned_until"), "meta": u.get("app_metadata")}
            for u in get("/auth/v1/admin/users?per_page=1000")["users"]]
 res["comptes"] = [len(comptes), empreinte(comptes)]

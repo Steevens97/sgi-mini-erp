@@ -33,6 +33,15 @@ create function rele.put(p text, v text) returns void language sql as $$
   insert into rele.v values (p, v) on conflict (cle) do update set val = excluded.val $$;
 create function rele.get(p text) returns text language sql as $$ select val from rele.v where cle = p $$;
 create function rele.r(p uuid) returns public.relances language sql as $$ select * from public.relances where id = p $$;
+-- Événement de livraison reçu par la route (signature vérifiée), avec la référence du compte d'essai.
+create function rele.ev(p_id text, p_type text, p_email text, p_relance uuid, p_le timestamptz, p_detail text default null)
+returns jsonb language sql as $$
+  select public.relances_recevoir_evenement(p_id, p_type, p_email, p_relance, p_le, p_detail, 'resend-essai-1') $$;
+-- Relecture par fonction : voit les écritures faites plus tôt dans la même instruction (comme rele.r).
+create function rele.e(p_id text) returns public.relances_evenements language sql volatile as $$
+  select * from public.relances_evenements where evenement_id = p_id $$;
+create function rele.evs(p_id text) returns text language sql as $$
+  select statut from public.relances_evenements where evenement_id = p_id $$;
 -- Facture posée comme le fait l'émission (contexte Finance), PDF « archivé » sans fichier (la base ne lit pas le PDF).
 create function rele.facture(p_num text, p_essai boolean, p_echeance date, p_pdf boolean, p_client uuid) returns uuid
 language plpgsql as $$
@@ -78,8 +87,9 @@ language sql as $$ select public.relances_reserver(p_id, p_facture, p_rang, rele
 grant execute on all functions in schema rele to authenticated, anon, service_role;
 
 \set ADMIN '\'11111111-1111-1111-1111-111111111111\''
-\set COMPTE '\'0123456789abcdef0123456789abcdef\''
-\set AUTRE_COMPTE '\'fedcba9876543210fedcba9876543210\''
+-- Références NON secrètes des comptes fournisseur (nom choisi par l'administrateur).
+\set COMPTE '\'resend-essai-1\''
+\set AUTRE_COMPTE '\'resend-essai-2\''
 -- Lundi 2 novembre 2026, 15 h en Martinique (19 h UTC).
 \set LUNDI '\'2026-11-02 19:00:00+00\''
 
@@ -354,7 +364,7 @@ select (rele.reserver(:RJ, :'fj', 1) ->> 'reservee')::boolean as ok_j \gset
 do $$ declare i int; begin
   for i in 1..5 loop
     perform rele.heure(('2026-11-02 12:00:00+00'::timestamptz + make_interval(mins => (i - 1) * 11))::text);
-    perform public.relances_prendre('77777777-0000-0000-0000-0000000000d1', '0123456789abcdef0123456789abcdef');
+    perform public.relances_prendre('77777777-0000-0000-0000-0000000000d1', 'resend-essai-1');
     perform public.relances_resultat('77777777-0000-0000-0000-0000000000d1', i, 'temporaire', null, 'HTTP 503');
   end loop;
 end $$;
@@ -433,78 +443,151 @@ select rele.heure('2026-11-11 15:00:00+00');
 select rele.ok('… le lendemain : la relance n° 1 se refait (un refus certain ne compte pas)',
   (rele.reserver('77777777-0000-0000-0000-0000000000c3', :'ff', 1) ->> 'reservee')::boolean);
 
--- ===================== Événements de livraison : doubles, retards, désordre =====================
-select rele.ok('événement d''un email inconnu : ignoré',
-  public.relances_evenement_livraison('evt-x', 'email.delivered', 'em-inconnu', null, now(), null) ->> 'resultat' = 'inconnu');
-select rele.refus('événement incomplet refusé', $q$select public.relances_evenement_livraison('', 'email.sent', 'em-0001', null, now(), null)$q$, 'incomplet');
+-- ===================== Événements de livraison : réception DURABLE, doubles, retards, désordre =====================
+-- Chaque événement signé est ENREGISTRÉ (table relances_evenements) puis rapproché si possible ; sinon il reste en attente,
+-- sans limite de durée. Aucune de ces opérations n'appelle le fournisseur ni ne crée de tentative.
+select rele.ok('événement d''un email inconnu : enregistré et conservé en attente (sans alerte)',
+  rele.ev('evt-x', 'email.delivered', 'em-inconnu', null, now()) ->> 'resultat' = 'en_attente'
+  and rele.evs('evt-x') = 'en_attente' and (select alerte is null from rele.e('evt-x')));
+select rele.refus('événement incomplet refusé', $q$select rele.ev('', 'email.sent', 'em-0001', null, now())$q$, 'incomplet');
+select rele.refus('événement sans email ni étiquette refusé', $q$select rele.ev('evt-vide', 'email.sent', null, null, now())$q$, 'incomplet');
+select rele.refus('référence de compte absente refusée',
+  $q$select public.relances_recevoir_evenement('evt-k0', 'email.sent', 'em-k', null, now(), null, '')$q$, 'référence du compte');
+select rele.refus('référence de compte ressemblant à une clé refusée',
+  $q$select public.relances_recevoir_evenement('evt-k0', 'email.sent', 'em-k', null, now(), null, 're_abcdefgh12345')$q$, 'référence du compte');
+select rele.refus('référence de compte ressemblant à un secret refusée',
+  $q$select public.relances_recevoir_evenement('evt-k0', 'email.sent', 'em-k', null, now(), null, 'mon-secret-resend')$q$, 'référence du compte');
+select rele.ok('… aucun de ces refus n''a rien enregistré', (select count(*) from public.relances_evenements where evenement_id in ('evt-k0', 'evt-vide', '')) = 0);
 -- Arrêt après acceptation, avant l'enregistrement de la réponse : l'événement (étiquette de la relance) la confirme.
 \set RC '\'77777777-0000-0000-0000-0000000000c4\''
 select rele.heure('2026-11-12 14:00:00+00');
 select (rele.reserver(:RC, :'fi', 1) ->> 'reservee')::boolean as ok_c \gset
 select public.relances_prendre(:RC, :COMPTE) is not null as tc \gset
 select rele.ok('arrêt après acceptation : l''événement « email.sent » retrouvé par l''étiquette confirme l''acceptation',
-  public.relances_evenement_livraison('evt-c1', 'email.sent', 'em-c', :RC, '2026-11-12 14:00:05+00', null) ->> 'statut' = 'acceptee'
-  and (rele.r(:RC)).fournisseur_id = 'em-c' and (rele.r(:RC)).date_envoi = '2026-11-12 14:00:05+00');
+  rele.ev('evt-c1', 'email.sent', 'em-c', :RC, '2026-11-12 14:00:05+00') ->> 'resultat' = 'rapproche'
+  and (rele.r(:RC)).statut = 'acceptee' and (rele.r(:RC)).fournisseur_id = 'em-c' and (rele.r(:RC)).date_envoi = '2026-11-12 14:00:05+00'
+  and rele.evs('evt-c1') = 'rapproche');
 select rele.ok('reprise après cette confirmation : rien à envoyer', public.relances_prendre(:RC, :COMPTE) ->> 'action' = 'rien');
 select rele.ok('réponse du fournisseur arrivée ensuite (même identifiant) : « déjà », rien ne change',
   (public.relances_resultat(:RC, 1, 'acceptee', 'em-c', null) ->> 'deja')::boolean and (rele.r(:RC)).date_envoi = '2026-11-12 14:00:05+00');
-select rele.ok('étiquette de cette relance mais AUTRE email : anomalie consignée, rien ne change',
-  public.relances_evenement_livraison('evt-c2', 'email.bounced', 'em-autre', :RC, now(), null) ->> 'statut' = 'acceptee'
-  and (rele.r(:RC)).rebond_le is null and (rele.r(:RC)).fournisseur_id = 'em-c'
-  and ((rele.r(:RC)).historique -> -1 ->> 'anomalie')::boolean);
--- Événement SANS étiquette arrivé AVANT l'enregistrement de l'identifiant (réponse du fournisseur pas encore écrite) :
--- « en attente », rien n'est écrit ; renvoyé par le fournisseur (même identifiant d'événement) après l'enregistrement :
--- rapproché, une seule fois.
+select jsonb_array_length((rele.r(:RC)).historique) as hist_c \gset
+select rele.ok('étiquette de cette relance mais AUTRE email : non appliqué, en attente avec alerte',
+  rele.ev('evt-c2', 'email.bounced', 'em-autre', :RC, now()) ->> 'resultat' = 'en_attente'
+  and (select alerte like 'Conflit : la relance%porte un autre identifiant%' from rele.e('evt-c2'))
+  and (rele.r(:RC)).rebond_le is null and (rele.r(:RC)).fournisseur_id = 'em-c' and jsonb_array_length((rele.r(:RC)).historique) = :hist_c);
+-- Étiquette d'une relance et identifiant d'une AUTRE relance : jamais appliqué, alerte explicite, aucune des deux ne change.
+select rele.ok('étiquette (relance L) et identifiant (relance C) contradictoires : en attente, alerte « Conflit », rien appliqué',
+  rele.ev('evt-cf', 'email.bounced', 'em-c', :RL, now()) ->> 'resultat' = 'en_attente'
+  and (select alerte like 'Conflit : l''étiquette désigne la relance%et l''identifiant fournisseur la relance%'
+         from rele.e('evt-cf'))
+  and (rele.r(:RC)).rebond_le is null and jsonb_array_length((rele.r(:RC)).historique) = :hist_c
+  and (rele.r(:RL)).statut = 'reservee' and (rele.r(:RL)).fournisseur_id is null);
+select rele.ok('… même cas, étiquette d''une relance inexistante : conflit aussi',
+  rele.ev('evt-cg', 'email.bounced', 'em-c', '77777777-0000-0000-0000-00000000ffff', now()) ->> 'alerte' like 'Conflit : l''étiquette%'
+  and (rele.r(:RC)).rebond_le is null);
+select rele.ok('… le balayage ne les applique jamais (toujours en attente, alertes conservées)',
+  (public.relances_rapprocher_tout() ->> 'alertes')::int >= 3 and rele.evs('evt-cf') = 'en_attente' and rele.evs('evt-c2') = 'en_attente'
+  and (rele.r(:RC)).rebond_le is null);
+-- Autre compte fournisseur (référence non secrète) : un identifiant identique ne suffit pas.
+select rele.ok('événement signé pour un AUTRE compte, même identifiant d''email : non appliqué, alerte « Compte fournisseur différent »',
+  public.relances_recevoir_evenement('evt-k1', 'email.bounced', 'em-c', null, now(), null, :AUTRE_COMPTE) ->> 'alerte'
+    like 'Compte fournisseur différent%'
+  and rele.evs('evt-k1') = 'en_attente' and (rele.r(:RC)).rebond_le is null and jsonb_array_length((rele.r(:RC)).historique) = :hist_c);
+-- Événements SANS étiquette arrivés AVANT l'enregistrement de l'identifiant : CONSERVÉS en attente, relance inchangée ;
+-- rapprochés dès l'acceptation, dans l'ordre de leur date, une seule fois.
 \set RN '\'77777777-0000-0000-0000-0000000000c7\''
 select rele.put('fn', rele.facture('ESSAI-FAC-2026-0113', true, date '2026-11-12' - 12, true, '55555555-0000-0000-0000-0000000000e1')::text);
 select rele.get('fn') as fn \gset
 select (rele.reserver(:RN, :'fn', 1) ->> 'reservee')::boolean as ok_n \gset
 select public.relances_prendre(:RN, :COMPTE) ->> 'action' as tn \gset
 select jsonb_array_length((rele.r(:RN)).historique) as hist_n \gset
-select public.relances_evenement_livraison('evt-n1', 'email.delivered', 'em-n', null, '2026-11-12 14:00:04+00', null) ->> 'resultat' as en1 \gset
-select public.relances_evenement_livraison('evt-n2', 'email.bounced', 'em-n', null, '2026-11-12 14:00:09+00', 'Boîte pleine définitivement') ->> 'resultat' as en2 \gset
-select rele.ok('événements sans étiquette avant l''enregistrement de l''identifiant : « en attente », RIEN écrit',
-  :'en1' = 'en_attente' and :'en2' = 'en_attente' and (rele.r(:RN)).fournisseur_id is null and (rele.r(:RN)).livre_le is null
+select rele.ev('evt-n2', 'email.bounced', 'em-n', null, '2026-11-12 14:00:09+00', 'Boîte pleine définitivement') ->> 'resultat' as en2 \gset
+select rele.ev('evt-n1', 'email.delivered', 'em-n', null, '2026-11-12 14:00:04+00') ->> 'resultat' as en1 \gset
+select rele.ok('événements sans étiquette avant l''enregistrement de l''identifiant : CONSERVÉS en attente, relance inchangée',
+  :'en1' = 'en_attente' and :'en2' = 'en_attente' and rele.evs('evt-n1') = 'en_attente' and rele.evs('evt-n2') = 'en_attente'
+  and (rele.r(:RN)).fournisseur_id is null and (rele.r(:RN)).livre_le is null
   and (rele.r(:RN)).rebond_le is null and jsonb_array_length((rele.r(:RN)).historique) = :hist_n and (rele.r(:RN)).statut = 'en_cours');
-select public.relances_resultat(:RN, 1, 'acceptee', 'em-n', null) ->> 'statut' as an \gset
-select public.relances_evenement_livraison('evt-n2', 'email.bounced', 'em-n', null, '2026-11-12 14:00:09+00', 'Boîte pleine définitivement') ->> 'resultat' as rn2 \gset
-select public.relances_evenement_livraison('evt-n1', 'email.delivered', 'em-n', null, '2026-11-12 14:00:04+00', null) ->> 'resultat' as rn1 \gset
-select rele.ok('renvoyés après l''enregistrement (dans le désordre) : rapprochés, rejet conservé, livraison antérieure gardée',
-  :'an' = 'acceptee' and :'rn2' = 'enregistre' and :'rn1' = 'enregistre' and (rele.r(:RN)).statut = 'rejetee'
-  and (rele.r(:RN)).rebond_motif = 'Boîte pleine définitivement' and (rele.r(:RN)).livre_le is null);
-select rele.ok('renvoyés une seconde fois : « déjà », aucun doublon dans l''historique',
-  public.relances_evenement_livraison('evt-n1', 'email.delivered', 'em-n', null, '2026-11-12 14:00:04+00', null) ->> 'resultat' = 'deja'
-  and public.relances_evenement_livraison('evt-n2', 'email.bounced', 'em-n', null, '2026-11-12 14:00:09+00', null) ->> 'resultat' = 'deja'
+select rele.ok('même événement reçu de nouveau : « déjà », une seule ligne',
+  rele.ev('evt-n1', 'email.delivered', 'em-n', null, '2026-11-12 14:00:04+00') ->> 'resultat' = 'deja'
+  and (select count(*) from rele.e('evt-n1')) = 1);
+select public.relances_resultat(:RN, 1, 'acceptee', 'em-n', null) as an \gset
+select rele.ok('acceptation enregistrée : les 2 événements conservés sont rapprochés (ordre de date), rejet conservé',
+  :'an'::jsonb ->> 'statut' = 'acceptee' and (:'an'::jsonb ->> 'evenements_rapproches')::int = 2
+  and rele.evs('evt-n1') = 'rapproche' and rele.evs('evt-n2') = 'rapproche' and (rele.r(:RN)).statut = 'rejetee'
+  and (rele.r(:RN)).rebond_motif = 'Boîte pleine définitivement' and (rele.r(:RN)).livre_le = '2026-11-12 14:00:04+00'
+  and (rele.r(:RN)).tentatives = 1);
+select rele.ok('renvoyés ensuite : « déjà », aucun doublon dans l''historique',
+  rele.ev('evt-n1', 'email.delivered', 'em-n', null, '2026-11-12 14:00:04+00') ->> 'resultat' = 'deja'
+  and rele.ev('evt-n2', 'email.bounced', 'em-n', null, '2026-11-12 14:00:09+00') ->> 'resultat' = 'deja'
   and (select count(*) from jsonb_array_elements((rele.r(:RN)).historique) e where e ->> 'evenement_id' in ('evt-n1', 'evt-n2')) = 2);
--- Au-delà de la durée des renvois du fournisseur (28 h après la dernière tentative) : plus « en attente » (jamais de refus
--- sans fin), l'événement est ignoré ; la relance reste à résoudre par l'administrateur.
+
+-- ===================== Interruption prolongée : rapprochement après 30 h, jamais de nouvel envoi =====================
+-- (a) Constat de l'administrateur. Tentative à 14 h 00 UTC, réponse jamais reçue ; événement sans étiquette reçu 1 h après.
 \set RO '\'77777777-0000-0000-0000-0000000000c8\''
 select rele.put('fo', rele.facture('ESSAI-FAC-2026-0114', true, date '2026-11-12' - 12, true, '55555555-0000-0000-0000-0000000000e1')::text);
 select rele.get('fo') as fo \gset
+select rele.heure('2026-11-12 14:00:00+00');
 select (rele.reserver(:RO, :'fo', 1) ->> 'reservee')::boolean as ok_o \gset
 select public.relances_prendre(:RO, :COMPTE) ->> 'action' as tob \gset
-select rele.ok('27 h après la tentative : encore « en attente »', (select rele.heure('2026-11-13 17:00:00+00')) is null
-  and public.relances_evenement_livraison('evt-o1', 'email.delivered', 'em-o', null, now(), null) ->> 'resultat' = 'en_attente');
-select rele.heure('2026-11-13 18:01:00+00');
-select rele.ok('28 h après la tentative : ignoré (« inconnu »), rien écrit',
-  public.relances_evenement_livraison('evt-o1', 'email.delivered', 'em-o', null, now(), null) ->> 'resultat' = 'inconnu'
-  and (rele.r(:RO)).fournisseur_id is null and (rele.r(:RO)).livre_le is null);
+select (rele.r(:RO)).limite_reprise as limite_o \gset
+select rele.heure('2026-11-12 15:00:00+00');
+select rele.ev('evt-o1', 'email.delivered', 'em-o', null, '2026-11-12 14:00:30+00') ->> 'resultat' as eo1 \gset
+select rele.heure('2026-11-13 20:00:00+00');   -- 30 h après la tentative (jeudi 16 h en Martinique)
+select rele.ok('30 h après : l''événement est toujours conservé en attente (aucun abandon automatique)',
+  :'eo1' = 'en_attente' and rele.evs('evt-o1') = 'en_attente');
+select rele.ok('30 h après : balayage sans effet (identifiant toujours inconnu), aucun appel',
+  (public.relances_rapprocher_tout() ->> 'rapproches')::int = 0 and rele.evs('evt-o1') = 'en_attente' and (rele.r(:RO)).tentatives = 1);
+select public.relances_prendre(:RO, :COMPTE) as po \gset
+select rele.ok('30 h après : la reprise est REFUSÉE (limite de 20 h dépassée) : « à vérifier », aucune tentative de plus',
+  :'po'::jsonb ->> 'action' <> 'envoyer' and (rele.r(:RO)).statut = 'a_verifier' and (rele.r(:RO)).tentatives = 1
+  and (rele.r(:RO)).limite_reprise = :'limite_o' and not exists (select 1 from public.relances_a_reprendre() x where x = :RO), :'po');
 reset role;
-select public.relances_resoudre(:ADMIN, :RO, 'aucun_envoi', 'Essai : aucun email chez le fournisseur', null, null) ->> 'statut' as ro_res \gset
+select public.relances_resoudre(:ADMIN, :RO, 'email_accepte', 'Email visible chez le fournisseur (essai)', '2026-11-12 14:00:20+00', 'em-o') as ro_res \gset
 set role service_role;
+select rele.ok('constat « email accepté » à 30 h avec l''identifiant : l''événement conservé est rapproché (livraison constatée)',
+  (:'ro_res'::jsonb ->> 'evenements_rapproches')::int = 1 and rele.evs('evt-o1') = 'rapproche'
+  and (rele.r(:RO)).statut = 'acceptee' and (rele.r(:RO)).livre_le = '2026-11-12 14:00:30+00', :'ro_res');
+select rele.ok('… aucun nouvel envoi : 1 tentative, limite de reprise inchangée, plus rien à reprendre ni à envoyer',
+  (rele.r(:RO)).tentatives = 1 and (rele.r(:RO)).limite_reprise = :'limite_o'
+  and (select count(*) from jsonb_array_elements((rele.r(:RO)).historique) e where e ->> 'action' = 'tentative') = 1
+  and public.relances_prendre(:RO, :COMPTE) ->> 'action' = 'rien' and not exists (select 1 from public.relances_a_reprendre() x where x = :RO));
+-- (b) Rapprochement indépendant de l'envoi : événement ÉTIQUETÉ reçu 30 h après (renvoi tardif du fournisseur).
+\set RP '\'77777777-0000-0000-0000-0000000000c9\''
+select rele.put('fp', rele.facture('ESSAI-FAC-2026-0115', true, date '2026-11-12' - 12, true, '55555555-0000-0000-0000-0000000000e1')::text);
+select rele.get('fp') as fp \gset
+select rele.heure('2026-11-12 14:10:00+00');
+select (rele.reserver(:RP, :'fp', 1) ->> 'reservee')::boolean as ok_p \gset
+select public.relances_prendre(:RP, :COMPTE) ->> 'action' as tpb \gset
+select (rele.r(:RP)).limite_reprise as limite_p \gset
+select rele.ev('evt-p1', 'email.delivered', 'em-p', null, '2026-11-12 14:10:40+00') ->> 'resultat' as ep1 \gset
+select rele.heure('2026-11-13 20:10:00+00');   -- 30 h après
+select rele.ok('événement étiqueté reçu 30 h après : rapproché, puis l''événement sans étiquette conservé l''est aussi',
+  rele.ev('evt-p2', 'email.sent', 'em-p', :RP, '2026-11-12 14:10:30+00') ->> 'resultat' = 'rapproche'
+  and rele.evs('evt-p1') = 'rapproche' and rele.evs('evt-p2') = 'rapproche'
+  and (rele.r(:RP)).statut = 'acceptee' and (rele.r(:RP)).fournisseur_id = 'em-p'
+  and (rele.r(:RP)).date_envoi = '2026-11-12 14:10:30+00' and (rele.r(:RP)).livre_le = '2026-11-12 14:10:40+00');
+select rele.ok('… aucun nouvel envoi : 1 tentative, limite de reprise inchangée, rien à reprendre',
+  (rele.r(:RP)).tentatives = 1 and (rele.r(:RP)).limite_reprise = :'limite_p'
+  and public.relances_prendre(:RP, :COMPTE) ->> 'action' = 'rien' and not exists (select 1 from public.relances_a_reprendre() x where x = :RP));
 select rele.heure('2026-11-12 14:00:00+00');
+
 -- Livré puis rejeté : le rejet l'emporte, la livraison constatée reste ; rejet en double ignoré ; « sent » tardif sans effet.
-select rele.ok('livré : livre_le posé', public.relances_evenement_livraison('evt-e1', 'email.delivered', 'em-0002', null, '2026-11-03 13:01:00+00', null) is not null
+select rele.ok('livré : livre_le posé', rele.ev('evt-e1', 'email.delivered', 'em-0002', null, '2026-11-03 13:01:00+00') ->> 'resultat' = 'rapproche'
   and (rele.r(:RE)).livre_le = '2026-11-03 13:01:00+00' and (rele.r(:RE)).statut = 'acceptee');
 select rele.ok('rejet définitif ensuite : « rejetée », livraison antérieure conservée, motif enregistré',
-  public.relances_evenement_livraison('evt-e2', 'email.bounced', 'em-0002', null, '2026-11-03 13:05:00+00', 'Boîte inexistante') ->> 'statut' = 'rejetee'
+  rele.ev('evt-e2', 'email.bounced', 'em-0002', null, '2026-11-03 13:05:00+00', 'Boîte inexistante') ->> 'resultat' = 'rapproche'
+  and (rele.r(:RE)).statut = 'rejetee'
   and (rele.r(:RE)).rebond_le = '2026-11-03 13:05:00+00' and (rele.r(:RE)).livre_le is not null and (rele.r(:RE)).rebond_motif = 'Boîte inexistante');
 select rele.ok('même événement reçu deux fois : ignoré (aucun ajout à l''historique)',
-  public.relances_evenement_livraison('evt-e2', 'email.bounced', 'em-0002', null, '2026-11-03 13:05:00+00', 'Boîte inexistante') ->> 'resultat' = 'deja'
+  rele.ev('evt-e2', 'email.bounced', 'em-0002', null, '2026-11-03 13:05:00+00', 'Boîte inexistante') ->> 'resultat' = 'deja'
   and (select count(*) = 1 from jsonb_array_elements((rele.r(:RE)).historique) e where e ->> 'evenement_id' = 'evt-e2'));
+select rele.ok('même identifiant d''événement, contenu différent : « déjà », contenu d''origine conservé',
+  rele.ev('evt-e2', 'email.delivered', 'em-0002', null, '2026-11-03 13:09:00+00', 'Autre') ->> 'resultat' = 'deja'
+  and (select type = 'email.bounced' and detail = 'Boîte inexistante' from rele.e('evt-e2')));
 select rele.ok('« sent » et « delivered » tardifs après le rejet : toujours « rejetée », rien d''effacé',
-  public.relances_evenement_livraison('evt-e3', 'email.sent', 'em-0002', null, '2026-11-03 13:00:00+00', null) ->> 'statut' = 'rejetee'
-  and public.relances_evenement_livraison('evt-e4', 'email.delivered', 'em-0002', null, '2026-11-03 13:10:00+00', null) ->> 'statut' = 'rejetee'
+  rele.ev('evt-e3', 'email.sent', 'em-0002', null, '2026-11-03 13:00:00+00') ->> 'resultat' = 'rapproche'
+  and rele.ev('evt-e4', 'email.delivered', 'em-0002', null, '2026-11-03 13:10:00+00') ->> 'resultat' = 'rapproche'
+  and (rele.r(:RE)).statut = 'rejetee'
   and (rele.r(:RE)).livre_le = '2026-11-03 13:01:00+00' and (rele.r(:RE)).rebond_le = '2026-11-03 13:05:00+00');
 select rele.ok('rejet : bloque les relances suivantes de la facture, même 9 jours plus tard',
   public.relances_situation(:'fe') ->> 'blocage' like 'Relance n° 1 rejetée par le serveur du destinataire%');
@@ -516,27 +599,28 @@ select (rele.reserver(:RM, :'fm', 1) ->> 'reservee')::boolean as ok_m \gset
 select public.relances_prendre(:RM, :COMPTE) is not null as tm \gset
 select public.relances_resultat(:RM, 1, 'acceptee', 'em-m', null) is not null as am \gset
 select rele.ok('désordre : rejet avant livraison, puis livraison tardive : « rejetée », livre_le vide',
-  public.relances_evenement_livraison('evt-m1', 'email.bounced', 'em-m', null, '2026-11-12 14:02:00+00', null) ->> 'statut' = 'rejetee'
-  and public.relances_evenement_livraison('evt-m2', 'email.delivered', 'em-m', null, '2026-11-12 14:01:00+00', null) ->> 'statut' = 'rejetee'
-  and (rele.r(:RM)).livre_le is null);
-select rele.ok('détail ressemblant à un secret : masqué',
-  public.relances_evenement_livraison('evt-m3', 'email.delivery_delayed', 'em-m', null, now(), 'Bearer abcdef') is not null
-  and (rele.r(:RM)).historique::text not like '%Bearer abcdef%');
+  rele.ev('evt-m1', 'email.bounced', 'em-m', null, '2026-11-12 14:02:00+00') ->> 'resultat' = 'rapproche'
+  and rele.ev('evt-m2', 'email.delivered', 'em-m', null, '2026-11-12 14:01:00+00') ->> 'resultat' = 'rapproche'
+  and (rele.r(:RM)).statut = 'rejetee' and (rele.r(:RM)).livre_le is null);
+select rele.ok('détail ressemblant à un secret : masqué (dans l''événement et dans l''historique)',
+  rele.ev('evt-m3', 'email.delivery_delayed', 'em-m', null, now(), 'Bearer abcdef') is not null
+  and (rele.r(:RM)).historique::text not like '%Bearer abcdef%'
+  and (select detail from rele.e('evt-m3')) = 'Détail masqué (donnée sensible possible).');
 -- Rejet APRÈS une résolution « email accepté » : bloque de nouveau (le rejet n'est jamais effacé).
-select public.relances_evenement_livraison('evt-h1', 'email.bounced', 'em-h', null, '2026-11-12 14:03:00+00', null) ->> 'statut' as st_h \gset
+select rele.ev('evt-h1', 'email.bounced', 'em-h', null, '2026-11-12 14:03:00+00') ->> 'resultat' as st_h \gset
 select rele.ok('rejet après un constat « email accepté » : bloque de nouveau la facture',
-  :'st_h' = 'rejetee' and public.relances_situation(:'fh') ->> 'blocage' like 'Relance n° 1 rejetée%', public.relances_situation(:'fh')::text);
+  :'st_h' = 'rapproche' and (rele.r(:RH)).statut = 'rejetee'
+  and public.relances_situation(:'fh') ->> 'blocage' like 'Relance n° 1 rejetée%', public.relances_situation(:'fh')::text);
 select rele.ok('… nouvelle résolution « traitée » : tracée avec la résolution précédente',
   public.relances_resoudre(:ADMIN, :RH, 'traitee', 'Adresse vérifiée avec le client', null, null) ->> 'statut' = 'rejetee'
   and (rele.r(:RH)).historique -> -1 -> 'resolution_precedente' ->> 'motif' = 'Email visible dans le tableau de bord Resend');
--- Événements sur une relance jamais tentée ou refusée : seulement consignés (anomalie), aucun changement d'état.
-select rele.ok('événement sur une relance seulement réservée : consigné comme anomalie, toujours « réservée »',
-  public.relances_evenement_livraison('evt-l1', 'email.sent', 'em-l', :RL, now(), null) ->> 'statut' = 'reservee'
-  and (rele.r(:RL)).fournisseur_id is null and (rele.r(:RL)).date_envoi is null
-  and ((rele.r(:RL)).historique -> -1 ->> 'anomalie')::boolean);
-select rele.ok('événement sur une relance refusée : anomalie, toujours « refusée »',
-  public.relances_evenement_livraison('evt-f1', 'email.bounced', 'em-f', :RF, now(), null) ->> 'statut' = 'refusee'
-  and (rele.r(:RF)).rebond_le is null);
+-- Événements sur une relance jamais tentée ou refusée : jamais appliqués, en attente avec alerte, aucun changement d'état.
+select rele.ok('événement sur une relance seulement réservée : en attente, alerte, toujours « réservée »',
+  rele.ev('evt-l1', 'email.sent', 'em-l', :RL, now()) ->> 'alerte' like '%n''a jamais été tentée%'
+  and (rele.r(:RL)).statut = 'reservee' and (rele.r(:RL)).fournisseur_id is null and (rele.r(:RL)).date_envoi is null);
+select rele.ok('événement sur une relance refusée : en attente, alerte, toujours « refusée »',
+  rele.ev('evt-f1', 'email.bounced', 'em-f', :RF, now()) ->> 'alerte' like '%a été refusée par le fournisseur%'
+  and (rele.r(:RF)).statut = 'refusee' and (rele.r(:RF)).rebond_le is null);
 -- Valeur constatée : livre_le jamais modifiée.
 reset role;
 select rele.refus('livraison constatée : jamais modifiée', format($q$do $x$ begin perform public.relances_contexte('evenement');
@@ -545,6 +629,78 @@ select rele.refus('limite de reprise : jamais renouvelée', format($q$do $x$ beg
      update public.relances set limite_reprise = limite_reprise + interval '1 day', historique = historique || '[{}]' where id = %L; end $x$$q$, :RJ), 'ne change jamais');
 select rele.refus('rejet : jamais effacé (retour à « acceptée » interdit)', format($q$do $x$ begin perform public.relances_contexte('evenement');
      update public.relances set statut = 'acceptee', historique = historique || '[{}]' where id = %L; end $x$$q$, :RE), 'changement d''état interdit');
+
+-- ===================== Table des événements : protections (tous les chemins, tableau de bord compris) =====================
+select rele.refus('insertion directe refusée (même propriétaire)',
+  $q$insert into public.relances_evenements (evenement_id, type, fournisseur_id, compte_fournisseur, survenu_le) values ('evt-direct', 'email.sent', 'em-z', 'resend-essai-1', now())$q$,
+  'naît uniquement');
+select rele.refus('contenu reçu jamais modifié', $q$do $x$ begin perform public.relances_contexte('rapprocher');
+     update public.relances_evenements set fournisseur_id = 'em-autre2' where evenement_id = 'evt-x'; end $x$$q$, 'ne se modifie jamais');
+select rele.refus('rapprochement direct refusé (sans la fonction ni le contexte)',
+  $q$update public.relances_evenements set statut = 'rapproche', rapproche_le = now(), relance_rapprochee = '77777777-0000-0000-0000-0000000000c4' where evenement_id = 'evt-x'$q$,
+  'réservé à l''application');
+select rele.refus('événement rapproché : figé', $q$do $x$ begin perform public.relances_contexte('classer');
+     update public.relances_evenements set statut = 'sans_suite', classe_le = now(), classe_par = '11111111-1111-1111-1111-111111111111', motif_classement = 'Essai de figeage' where evenement_id = 'evt-c1'; end $x$$q$, 'figé');
+select rele.refus('suppression d''un événement en attente refusée (jamais supprimé automatiquement)',
+  $q$do $x$ begin perform public.relances_contexte('purge'); delete from public.relances_evenements where evenement_id = 'evt-x'; end $x$$q$, 'ne se supprime pas');
+select rele.refus('suppression d''un événement rapproché récent refusée', $q$delete from public.relances_evenements where evenement_id = 'evt-c1'$q$, 'ne se supprime pas');
+set role authenticated;
+select rele.refus('jeton : lecture des événements refusée', $q$select count(*) from public.relances_evenements$q$, 'permission denied');
+reset role;
+set role anon;
+select rele.refus('visiteur : lecture des événements refusée', $q$select count(*) from public.relances_evenements$q$, 'permission denied');
+reset role;
+
+-- ===================== Classement « sans suite » (administrateur, motif) =====================
+set role service_role;
+select rele.refus('classement par un compte non administrateur refusé',
+  $q$select public.relances_classer_evenement('aaaaaaaa-0000-0000-0000-0000000000c9', 'evt-x', 'Motif valable')$q$, 'administrateur actif');
+select rele.refus('classement sans motif refusé', format($q$select public.relances_classer_evenement(%L, 'evt-x', ' ')$q$, :ADMIN), 'motif obligatoire');
+select rele.refus('classement d''un événement rapproché refusé', format($q$select public.relances_classer_evenement(%L, 'evt-c1', 'Motif valable')$q$, :ADMIN),
+  'seul un événement en attente');
+select rele.ok('classement « sans suite » : tracé (auteur, date, motif), aucune relance touchée',
+  public.relances_classer_evenement(:ADMIN, 'evt-x', 'Email inconnu : essai sans suite') ->> 'statut' = 'sans_suite'
+  and (select classe_par = :ADMIN and motif_classement = 'Email inconnu : essai sans suite' and classe_le is not null
+         from rele.e('evt-x')));
+select rele.ok('événement « sans suite » renvoyé avant sa suppression : « déjà », reste « sans suite »',
+  rele.ev('evt-x', 'email.delivered', 'em-inconnu', null, now()) ->> 'resultat' = 'deja' and rele.evs('evt-x') = 'sans_suite');
+select public.relances_classer_evenement(:ADMIN, 'evt-cg', 'Conflit d''essai, sans suite') is not null as cl_g \gset
+
+-- ===================== Nettoyage à 30 jours, puis renvois =====================
+select count(*) as nb_attente from public.relances_evenements where statut = 'en_attente' \gset
+select rele.heure('2026-12-12 14:00:00+00');   -- 30 jours après le dernier rapprochement ou classement (12/11 à 14 h) : pas encore
+select rele.ok('nettoyage avant 30 jours : rien supprimé',
+  public.relances_purger_evenements() = 0 and rele.evs('evt-c1') = 'rapproche' and rele.evs('evt-x') = 'sans_suite');
+select rele.heure('2026-12-14 14:00:00+00');
+select public.relances_purger_evenements() as purges \gset
+select rele.ok('nettoyage après 30 jours : rapprochés et « sans suite » supprimés, AUCUN événement en attente supprimé',
+  :purges > 0 and rele.evs('evt-c1') is null and rele.evs('evt-x') is null and rele.evs('evt-cg') is null
+  and (select count(*) from public.relances_evenements where statut = 'en_attente') = :nb_attente
+  and (select count(*) from public.relances_evenements where statut <> 'en_attente') = 0, :purges::text);
+select rele.ok('… l''événement rapproché reste copié dans l''historique de sa relance',
+  (select count(*) from jsonb_array_elements((rele.r(:RE)).historique) e where e ->> 'evenement_id' = 'evt-e2') = 1);
+select jsonb_array_length((rele.r(:RE)).historique) as hist_e \gset
+select rele.ok('renvoi d''un événement rapproché puis supprimé : réenregistré et rapproché SANS EFFET (« déjà appliqué »)',
+  rele.ev('evt-e2', 'email.bounced', 'em-0002', null, '2026-11-03 13:05:00+00', 'Boîte inexistante') ->> 'application' = 'deja_applique'
+  and rele.evs('evt-e2') = 'rapproche' and jsonb_array_length((rele.r(:RE)).historique) = :hist_e
+  and (rele.r(:RE)).statut = 'rejetee' and (rele.r(:RE)).rebond_le = '2026-11-03 13:05:00+00');
+select rele.ok('renvoi d''un événement étiqueté rapproché puis supprimé (relance C) : sans effet, aucun envoi',
+  rele.ev('evt-c1', 'email.sent', 'em-c', :RC, '2026-11-12 14:00:05+00') ->> 'application' = 'deja_applique'
+  and jsonb_array_length((rele.r(:RC)).historique) = :hist_c and (rele.r(:RC)).tentatives = 1
+  and public.relances_prendre(:RC, :COMPTE) ->> 'action' = 'rien');
+-- « Sans suite » supprimé puis renvoyé : il REVIENT en attente (comme un nouvel événement) ; rapproché seulement s'il
+-- correspond désormais à une relance (même règles, mêmes alertes), sinon l'administrateur le reclasse.
+select rele.ok('renvoi d''un événement « sans suite » supprimé : de nouveau en attente (nouvelle réception), à reclasser',
+  rele.ev('evt-x', 'email.delivered', 'em-inconnu', null, '2026-11-12 14:00:00+00') ->> 'resultat' = 'en_attente'
+  and rele.evs('evt-x') = 'en_attente'
+  and (select classe_le is null and motif_classement is null from rele.e('evt-x')));
+select rele.ok('renvoi d''un « sans suite » en conflit supprimé : de nouveau en attente AVEC la même alerte, rien appliqué',
+  rele.ev('evt-cg', 'email.bounced', 'em-c', '77777777-0000-0000-0000-00000000ffff', now()) ->> 'alerte' like 'Conflit : l''étiquette%'
+  and (rele.r(:RC)).rebond_le is null);
+select rele.ok('aucun secret dans les événements', not exists (select 1 from public.relances_evenements e
+  where public.relances_contient_secret(coalesce(e.detail, '') || coalesce(e.alerte, '') || coalesce(e.motif_classement, '') || e.compte_fournisseur)));
+select rele.heure('2026-11-12 14:00:00+00');
+reset role;
 
 -- ===================== Calendrier : rattrapage d'une facture découverte à J+40 =====================
 set role service_role;
@@ -582,6 +738,9 @@ reset role;
 select rele.ok('nettoyage : factures d''essai et TOUTES leurs relances supprimées',
   (select count(*) = 0 from public.relances where essai) and (select count(*) = 0 from public.factures where essai)
   and (:'net'::jsonb ->> 'relances')::int > 0);
+select rele.ok('nettoyage : événements liés aux relances d''essai supprimés ; seul reste l''événement sans aucun lien (evt-x, à classer)',
+  (:'net'::jsonb ->> 'evenements')::int > 0
+  and (select string_agg(evenement_id, ',') from public.relances_evenements) = 'evt-x');
 select rele.ok('aucune relance réelle n''a existé dans ces tests (0 avant et après le nettoyage)',
   :reelles = 0 and (select count(*) from public.relances where not essai) = 0);
 

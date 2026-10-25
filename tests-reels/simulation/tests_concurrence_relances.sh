@@ -8,7 +8,7 @@ OKS=0; TOTAL=0
 ok() { TOTAL=$((TOTAL+1)); if [ "$2" = "$3" ]; then OKS=$((OKS+1)); echo "  [OK ] $1 ($2)"; else echo "  [ÉCHEC] $1 : obtenu « $2 », attendu « $3 »"; fi; }
 T=/var/tmp/pg-essai/concurrence_rel; mkdir -p $T
 ADMIN=11111111-1111-1111-1111-111111111111
-COMPTE=0123456789abcdef0123456789abcdef
+COMPTE=resend-essai-1   # référence NON secrète du compte fournisseur
 DEF=$(q -c "select md5(prosrc) from pg_proc where proname = 'relances_maintenant'")
 q <<'SQL' >/dev/null
 create schema if not exists relc;
@@ -82,15 +82,49 @@ wait
 ok "la tentative a lieu" "$(head -1 $T/d1)" "envoyer"
 ok "la résolution attend puis est refusée (tentative peut-être en cours)" "$(grep -c 'une tentative est peut-être en cours' $T/d2)" "1"
 
-echo "Cas E : réponse du fournisseur et événement « email.sent » reçus en même temps"
+echo "Cas E : réponse du fournisseur et événement « email.sent » SANS étiquette reçus en même temps"
 q -c "set role service_role; begin; select public.relances_resultat('88888888-0000-0000-0000-0000000000a1', 2, 'acceptee', 'em-conc', null); select pg_sleep(2); commit;" > $T/e1 2>&1 &
 sleep 0.5
-q -c "set role service_role; select public.relances_evenement_livraison('evt-conc', 'email.sent', 'em-conc', '88888888-0000-0000-0000-0000000000a1', now(), null)" > $T/e2 2>&1
+q -c "set role service_role; select public.relances_recevoir_evenement('evt-conc', 'email.sent', 'em-conc', null, now(), null, '$COMPTE') ->> 'resultat'" > $T/e2 2>&1
 wait
 ok "aucune erreur des deux côtés" "$(cat $T/e1 $T/e2 | grep -c ERROR)" "0"
-ok "acceptée une fois, identifiant unique, événement consigné une fois" \
-  "$(q -c "select statut || ',' || fournisseur_id || ',' || (select count(*) from jsonb_array_elements(historique) e where e ->> 'action' = 'acceptation') || ',' || (select count(*) from jsonb_array_elements(historique) e where e ->> 'evenement_id' = 'evt-conc') from public.relances where id = '88888888-0000-0000-0000-0000000000a1'")" \
-  "acceptee,em-conc,1,1"
+ok "acceptée une fois, identifiant unique, événement enregistré, rapproché et consigné une fois" \
+  "$(q -c "select statut || ',' || fournisseur_id || ',' || (select count(*) from jsonb_array_elements(historique) e where e ->> 'action' = 'acceptation') || ',' || (select count(*) from jsonb_array_elements(historique) e where e ->> 'evenement_id' = 'evt-conc') || ',' || (select statut from public.relances_evenements where evenement_id = 'evt-conc') from public.relances where id = '88888888-0000-0000-0000-0000000000a1'")" \
+  "acceptee,em-conc,1,1,rapproche"
+
+echo "Cas E2 : le même événement reçu deux fois en même temps (renvoi du fournisseur)"
+q -c "set role service_role; begin; select public.relances_recevoir_evenement('evt-double', 'email.delivered', 'em-conc', null, now(), null, '$COMPTE') ->> 'resultat'; select pg_sleep(2); commit;" > $T/g1 2>&1 &
+sleep 0.5
+q -c "set role service_role; select public.relances_recevoir_evenement('evt-double', 'email.delivered', 'em-conc', null, now(), null, '$COMPTE') ->> 'resultat'" > $T/g2 2>&1
+wait
+ok "le premier rapproche, le second répond « déjà » (une seule ligne, une seule application)" \
+  "$(head -1 $T/g1),$(head -1 $T/g2),$(q -c "select count(*) from public.relances_evenements where evenement_id = 'evt-double'"),$(q -c "select count(*) from public.relances r, jsonb_array_elements(r.historique) e where e ->> 'evenement_id' = 'evt-double'")" \
+  "rapproche,deja,1,1"
+
+echo "Cas E3 : classement « sans suite » pendant un rapprochement du même événement"
+FG=$(q -c "select relc.facture('ESSAI-FAC-2026-0804')")
+reserver 88888888-0000-0000-0000-0000000000d9 $FG 0 > /dev/null
+q -c "set role service_role; select public.relances_prendre('88888888-0000-0000-0000-0000000000d9', '$COMPTE') ->> 'action'" > /dev/null
+q -c "set role service_role; select public.relances_recevoir_evenement('evt-g', 'email.delivered', 'em-g', null, now(), null, '$COMPTE') ->> 'resultat'" > /dev/null
+q -c "set role service_role; begin; select public.relances_resultat('88888888-0000-0000-0000-0000000000d9', 1, 'acceptee', 'em-g', null) ->> 'evenements_rapproches'; select pg_sleep(2); commit;" > $T/h1 2>&1 &
+sleep 0.5
+q -c "set role service_role; select public.relances_classer_evenement('$ADMIN', 'evt-g', 'Classement concurrent')" > $T/h2 2>&1
+wait
+ok "le classement attend le rapprochement, puis est refusé (événement déjà rapproché)" \
+  "$(head -1 $T/h1),$(grep -c 'seul un événement en attente' $T/h2),$(q -c "select statut from public.relances_evenements where evenement_id = 'evt-g'")" \
+  "1,1,rapproche"
+
+echo "Cas E4 : événement SANS étiquette en cours d'enregistrement quand la réponse du fournisseur arrive"
+FH=$(q -c "select relc.facture('ESSAI-FAC-2026-0805')")
+reserver 88888888-0000-0000-0000-0000000000d8 $FH 0 > /dev/null
+q -c "set role service_role; select public.relances_prendre('88888888-0000-0000-0000-0000000000d8', '$COMPTE') ->> 'action'" > /dev/null
+q -c "set role service_role; begin; select public.relances_recevoir_evenement('evt-h', 'email.delivered', 'em-h4', null, now(), null, '$COMPTE') ->> 'resultat'; select pg_sleep(2); commit;" > $T/i1 2>&1 &
+sleep 0.5
+q -c "set role service_role; select public.relances_resultat('88888888-0000-0000-0000-0000000000d8', 1, 'acceptee', 'em-h4', null) ->> 'evenements_rapproches'" > $T/i2 2>&1
+wait
+ok "la réponse attend l'enregistrement de l'événement, puis le rapproche aussitôt" \
+  "$(head -1 $T/i1),$(head -1 $T/i2),$(q -c "select statut from public.relances_evenements where evenement_id = 'evt-h'"),$(q -c "select livre_le is not null from public.relances where id = '88888888-0000-0000-0000-0000000000d8'")" \
+  "en_attente,1,rapproche,t"
 
 echo "Cas F : règlement de la facture pendant une réservation"
 FF=$(q -c "select relc.facture('ESSAI-FAC-2026-0803')")
@@ -129,6 +163,6 @@ drop schema relc cascade;
 delete from public.clients where id = '55555555-0000-0000-0000-0000000000c1';
 SQL
 ok "heure réelle rétablie (empreinte d'origine)" "$(q -c "select md5(prosrc) from pg_proc where proname = 'relances_maintenant'")" "$DEF"
-ok "aucune relance ni facture d'essai restante" "$(q -c "select (select count(*) from public.relances) + (select count(*) from public.factures where essai)")" "0"
+ok "aucune relance, facture d'essai ni événement restant" "$(q -c "select (select count(*) from public.relances) + (select count(*) from public.factures where essai) + (select count(*) from public.relances_evenements)")" "0"
 rm -rf $T
 echo "BILAN : $OKS/$TOTAL contrôles réussis"

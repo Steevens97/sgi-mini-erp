@@ -33,7 +33,7 @@ function serveur(env) {
   // Sorties ignorées : sinon le serveur lancé en arrière-plan garde la sortie ouverte et l'appel ne rend jamais la main.
   execFileSync("bash", [SERVEUR, "stop"], { stdio: "ignore" });
   execFileSync("bash", [SERVEUR, "start"], { stdio: "ignore", env: { ...process.env, RESEND_URL: F, RESEND_API_KEY: CLE,
-    RELANCES_SECRET_CRON: SECRET, RESEND_WEBHOOK_SECRET: WHSEC, RELANCES_ADRESSE_ESSAI: ESSAI, ...env } });
+    RELANCES_SECRET_CRON: SECRET, RESEND_WEBHOOK_SECRET: WHSEC, RELANCES_ADRESSE_ESSAI: ESSAI, RESEND_COMPTE_REFERENCE: "resend-essai-1", ...env } });
 }
 // Après un redémarrage du serveur, Node peut réutiliser une connexion vers l'ancien serveur arrêté (« other side
 // closed ») : la demande n'a alors jamais été reçue, elle est renvoyée (une fois) sur une nouvelle connexion.
@@ -114,6 +114,8 @@ try {
   const b0 = await r.json();
   verifier("bon secret, relances non activées : rien réservé, rien envoyé", r.status === 200 && b0.actives === false
     && sql("select count(*) from public.relances") === "0" && (await etat()).demandes.length === 0, JSON.stringify(b0));
+  verifier("… le rapprochement et le nettoyage des événements tournent quand même (aucun envoi)",
+    b0.evenements?.examines === 0 && b0.evenements?.purges === 0, JSON.stringify(b0.evenements));
 
   console.log("== Relances activées : première exécution (lundi 15 h en Martinique)");
   serveur({ RELANCES_ACTIVES: "1" });
@@ -145,19 +147,26 @@ try {
   let re = relance("ESSAI-FAC-2026-0205");
   verifier("réponse perdue : « envoi non confirmé », AUCUNE date d'envoi", re.statut === "en_cours" && re.date_envoi === null && re.tentatives === 1, re.erreur);
   // L'imitation a accepté l'email : son identifiant existe chez le fournisseur, pas encore dans la base. Événement sans
-  // étiquette, envoyé maintenant : refusé « en attente » (503) pour être renvoyé ; rien n'est écrit.
+  // étiquette, envoyé maintenant : ENREGISTRÉ (200) et conservé en attente ; la relance n'est pas modifiée.
   const idPerdu = (await etat()).emails.find((x) => x.cle === `sgi-relance-${re.id}`).id;
+  // Route sans référence de compte : 500, RIEN enregistré (le fournisseur renverra) ; puis remise en ordre et renvoi.
+  serveur({ RELANCES_ACTIVES: "1", RESEND_COMPTE_REFERENCE: "" });
   let rp = await evenementSansEtiquette("msg_precoce", "email.delivered", idPerdu, "2026-11-02T19:00:20Z");
+  verifier("route sans référence de compte : 500, rien enregistré", rp.status === 500
+    && sql("select count(*) from public.relances_evenements where evenement_id = 'msg_precoce'") === "0", `HTTP ${rp.status}`);
+  serveur({ RELANCES_ACTIVES: "1" });
+  rp = await evenementSansEtiquette("msg_precoce", "email.delivered", idPerdu, "2026-11-02T19:00:20Z");
   const corpsPrecoce = await rp.json();
-  verifier("événement sans étiquette avant l'enregistrement de l'identifiant : 503 « en attente », rien écrit",
-    rp.status === 503 && corpsPrecoce.resultat === "en_attente" && relance("ESSAI-FAC-2026-0205").livre_le === null
-    && relance("ESSAI-FAC-2026-0205").fournisseur_id === null, `HTTP ${rp.status}`);
+  verifier("renvoyé (sans étiquette, avant l'enregistrement de l'identifiant) : 200, CONSERVÉ en attente, relance inchangée",
+    rp.status === 200 && corpsPrecoce.resultat === "en_attente"
+    && sql("select statut || ',' || compte_fournisseur from public.relances_evenements where evenement_id = 'msg_precoce'") === "en_attente,resend-essai-1"
+    && relance("ESSAI-FAC-2026-0205").livre_le === null && relance("ESSAI-FAC-2026-0205").fournisseur_id === null, `HTTP ${rp.status}`);
   await modeImitation("normal");
   horloge("2026-11-02 19:11:00+00");
   await executer();
-  rp = await evenementSansEtiquette("msg_precoce", "email.delivered", idPerdu, "2026-11-02T19:00:20Z");
-  verifier("même événement renvoyé après l'enregistrement : rapproché (livre_le)", rp.status === 200
-    && (await rp.json()).resultat === "enregistre" && relance("ESSAI-FAC-2026-0205").livre_le?.startsWith("2026-11-02T19:00:20"));
+  verifier("reprise acceptée : l'événement conservé est rapproché aussitôt (livre_le), sans renvoi du fournisseur",
+    sql("select statut from public.relances_evenements where evenement_id = 'msg_precoce'") === "rapproche"
+    && relance("ESSAI-FAC-2026-0205").livre_le?.startsWith("2026-11-02T19:00:20"));
   rp = await evenementSansEtiquette("msg_precoce", "email.delivered", idPerdu, "2026-11-02T19:00:20Z");
   verifier("renvoyé encore une fois : « déjà », un seul événement dans l'historique", (await rp.json()).resultat === "deja"
     && relance("ESSAI-FAC-2026-0205").historique.filter((e) => e.evenement_id === "msg_precoce").length === 1);
@@ -187,7 +196,7 @@ try {
   await facture("ESSAI-FAC-2026-0207", 12);
   await modeImitation("erreur_503");
   await executer();
-  serveur({ RELANCES_ACTIVES: "1", RESEND_API_KEY: CLE2 });
+  serveur({ RELANCES_ACTIVES: "1", RESEND_API_KEY: CLE2, RESEND_COMPTE_REFERENCE: "resend-essai-2" });
   await modeImitation("normal");
   horloge("2026-11-02 19:33:00+00");
   const n = (await etat()).demandes.length;
@@ -195,6 +204,12 @@ try {
   const rh = relance("ESSAI-FAC-2026-0207");
   verifier("autre compte : « à vérifier », aucun appel au fournisseur", rh.statut === "a_verifier"
     && /Compte fournisseur différent/.test(rh.erreur) && (await etat()).demandes.length === n);
+  // Événement reçu par le nouveau compte au sujet d'un email de l'ancien : jamais rapproché, alerte.
+  rp = await evenementSansEtiquette("msg_autre_compte", "email.bounced", ra.fournisseur_id, "2026-11-02T19:34:00Z");
+  verifier("événement signé pour le nouveau compte, email de l'ancien : en attente, alerte « Compte fournisseur différent »",
+    rp.status === 200 && (await rp.json()).resultat === "en_attente"
+    && sql("select alerte from public.relances_evenements where evenement_id = 'msg_autre_compte'").startsWith("Compte fournisseur différent")
+    && relance("ESSAI-FAC-2026-0201").rebond_le === null);
   serveur({ RELANCES_ACTIVES: "1" });
 
   console.log("== Refus certain (422)");
@@ -215,7 +230,7 @@ try {
     return demander(`${B}/api/relances/livraison`, { method: "POST", body: corps, headers: signer(id, corps) });
   };
   r = await evenement("msg_1", "email.delivered", ra.fournisseur_id, "2026-11-02T19:00:30Z");
-  verifier("livraison signée : enregistrée (livre_le)", r.status === 200 && (await r.json()).resultat === "enregistre"
+  verifier("livraison signée : enregistrée et rapprochée (livre_le)", r.status === 200 && (await r.json()).resultat === "rapproche"
     && relance("ESSAI-FAC-2026-0201").livre_le?.startsWith("2026-11-02T19:00:30"));
   r = await evenement("msg_1", "email.delivered", ra.fournisseur_id, "2026-11-02T19:00:30Z");
   verifier("même événement renvoyé : « déjà »", (await r.json()).resultat === "deja");
@@ -232,6 +247,15 @@ try {
   verifier("rejet définitif puis livraison tardive : « rejetée », motif conservé, rien effacé",
     reb.statut === "rejetee" && reb.rebond_motif === "Mailbox does not exist"
     && reb.livre_le?.startsWith("2026-11-02T19:00:20"));   // livraison antérieure conservée, la tardive (19 h 13) ignorée
+
+  // Événement d'un email inconnu (aucune relance) et événement contradictoire (étiquette d'une relance refusée) : conservés.
+  await evenement("msg_inconnu", "email.delivered", "em-inconnu-e2e", "2026-11-02T19:40:00Z");
+  const corpsAl = JSON.stringify({ type: "email.delivered", created_at: "2026-11-02T19:41:00Z", data: { email_id: "em-autre-e2e", tags: [{ name: "relance_id", value: ri.id }] } });
+  r = await demander(`${B}/api/relances/livraison`, { method: "POST", body: corpsAl, headers: signer("msg_alerte", corpsAl) });
+  verifier("événement sur une relance refusée : 200, conservé en attente avec alerte, relance inchangée",
+    r.status === 200 && (await r.json()).resultat === "en_attente"
+    && /a été refusée par le fournisseur/.test(sql("select alerte from public.relances_evenements where evenement_id = 'msg_alerte'"))
+    && relance("ESSAI-FAC-2026-0208").statut === "refusee");
 
   console.log("== Écran (administrateur) : simulation sans envoi, résolution");
   await facture("ESSAI-FAC-2026-0209", 12);
@@ -255,8 +279,26 @@ try {
   verifier("écran : facture sans PDF et client sans email listés à part",
     (await page.locator("[data-sans-pdf]").textContent()).includes("ESSAI-FAC-2026-0202")
     && (await page.locator("[data-sans-email]").textContent()).includes("ESSAI-FAC-2026-0203"));
-  verifier("écran : un seul bouton, la simulation (aucun bouton d'envoi, de réservation ou de modification d'échéance)",
-    JSON.stringify(await page.locator("main button").allInnerTexts()) === JSON.stringify(["Simuler les relances du jour (aucun envoi)"]));
+  verifier("écran : référence du compte fournisseur affichée (non secrète)",
+    (await page.locator("[data-reference-compte]").innerText()).includes("resend-essai-1"));
+  const attente = await page.locator("[data-evenements-attente]").innerText();
+  verifier("écran : événements en attente listés (3), avec leurs alertes",
+    (await page.locator("[data-evenement]").count()) === 3 && (await page.locator("[data-evenement] [data-alerte]").count()) === 2
+    && attente.includes("Compte fournisseur différent") && attente.includes("a été refusée par le fournisseur"), attente.slice(0, 200));
+  verifier("écran : boutons = simulation + « Classer sans suite » par événement (aucun bouton d'envoi, de réservation ou de modification d'échéance)",
+    JSON.stringify(await page.locator("main button").allInnerTexts())
+      === JSON.stringify(["Simuler les relances du jour (aucun envoi)", "Classer sans suite", "Classer sans suite", "Classer sans suite"]));
+  for (const id of ["msg_inconnu", "msg_alerte", "msg_autre_compte"]) {
+    await page.locator(`[data-evenement="${id}"] input[name=motif]`).fill("Essai : événement sans suite");
+    await page.locator(`[data-evenement="${id}"] button`).click();
+    await page.locator(`[data-evenement="${id}"]`).waitFor({ state: "detached" });
+    await page.waitForSelector("[data-confirmation]");
+  }
+  verifier("classement par l'écran : 3 événements « sans suite » tracés (auteur, motif), aucune relance modifiée, aucun appel",
+    sql("select count(*) from public.relances_evenements where statut = 'sans_suite' and classe_par is not null and motif_classement = 'Essai : événement sans suite'") === "3"
+    && relance("ESSAI-FAC-2026-0208").statut === "refusee" && relance("ESSAI-FAC-2026-0201").rebond_le === null);
+  verifier("écran : plus que le bouton de simulation", JSON.stringify(await page.locator("main button").allInnerTexts())
+    === JSON.stringify(["Simuler les relances du jour (aucun envoi)"]));
   const avant = { relances: sql("select count(*) from public.relances"), demandes: (await etat()).demandes.length };
   await page.click("button:has-text('Simuler les relances du jour')");
   await page.waitForSelector("[data-simulation]");
@@ -289,8 +331,8 @@ try {
   await nav.close();
 
   console.log("== Secrets");
-  const tout = sql("select coalesce(string_agg(r::text, '|'), '') from public.relances r");
-  verifier("aucun secret de l'essai dans la table relances (demande, historique, erreurs)", !SECRETS.some((s) => tout.includes(s)));
+  const tout = sql("select coalesce(string_agg(r::text, '|'), '') from public.relances r") + sql("select coalesce(string_agg(e::text, '|'), '') from public.relances_evenements e");
+  verifier("aucun secret de l'essai dans les tables relances et relances_evenements", !SECRETS.some((s) => tout.includes(s)));
   const journal = readFileSync("/var/tmp/pg-essai/next.log", "utf8");
   verifier("aucun secret dans le journal du serveur", !SECRETS.some((s) => journal.includes(s)));
 } finally {
@@ -298,6 +340,8 @@ try {
   execFileSync("bash", [SERVEUR, "stop"], { stdio: "ignore" });
   imitation.kill();
   const net = JSON.parse(sql("select public.supprimer_essais_finance()"));
+  // Événements sans lien avec une relance d'essai (classés « sans suite » par l'écran) : nettoyage à 30 jours (horloge simulée).
+  sql("update relt.horloge set t = now() + interval '40 days'; select public.relances_purger_evenements();");
   for (const chemin of net.pdf_chemins) {
     await fetch(`${P}/storage/v1/object/factures`, { method: "DELETE", body: JSON.stringify({ prefixes: [chemin] }),
       headers: { Authorization: `Bearer ${SERVICE}`, apikey: SERVICE, "Content-Type": "application/json" } });
@@ -321,7 +365,7 @@ $$;
     drop schema relt cascade;`);
   verifier("heure réelle et règle des adresses fictives rétablies", sql("select md5(prosrc) from pg_proc where proname = 'relances_maintenant'") === DEF
     && sql("select public.relances_adresse_fictive('a@exemple.invalid')") === "t");
-  verifier("aucun reste : relances, factures d'essai, fichiers du bucket factures",
-    sql("select (select count(*) from public.relances) + (select count(*) from public.factures where essai) + (select count(*) from storage.objects where bucket_id = 'factures')") === "0");
+  verifier("aucun reste : relances, événements, factures d'essai, fichiers du bucket factures",
+    sql("select (select count(*) from public.relances) + (select count(*) from public.relances_evenements) + (select count(*) from public.factures where essai) + (select count(*) from storage.objects where bucket_id = 'factures')") === "0");
   console.log(`\nBILAN : ${ok}/${ok + ko} contrôles réussis`);
 }
