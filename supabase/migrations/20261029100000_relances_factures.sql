@@ -10,12 +10,18 @@
 --     par le fournisseur ou par un constat admin tracé ;
 --   - une relance incertaine (réservée, en cours, à vérifier), refusée ou rejetée bloque toute nouvelle relance de la
 --     facture, jusqu'à la résolution par l'administrateur (motif obligatoire, tracée) ;
---   - événements de livraison (webhook) : en double, en retard ou dans le désordre, ils ne font jamais régresser un état
---     et n'effacent jamais un rejet définitif ;
+--   - événements de livraison (webhook signé) : REÇUS DURABLEMENT dans la 14e table relances_evenements (accord de
+--     l'utilisateur du 25/10/2026), puis rapprochés de leur relance, même longtemps après (incident prolongé) ; en double,
+--     en retard ou dans le désordre, ils ne font jamais régresser un état et n'effacent jamais un rejet définitif ; jamais
+--     appliqués si l'étiquette et l'identifiant désignent deux relances différentes ou si le compte fournisseur diffère
+--     (alerte, en attente) ; un rapprochement ne déclenche JAMAIS d'envoi ;
+--   - compte fournisseur : RÉFÉRENCE NON SECRÈTE configurée (ex. « resend-sgi »), recopiée sur la relance à la première
+--     tentative et sur chaque événement reçu ; une reprise ou un rapprochement avec une autre référence est refusé ;
 --   - aucun secret dans la demande, l'historique ou les messages d'erreur ; aucun appel réseau pendant la migration ;
 --     la fonction de déclenchement (pour la future tâche Cron) échoue explicitement si Vault ou pg_net manque.
 -- Cette migration NE CRÉE AUCUNE TÂCHE CRON et n'installe aucune extension (activation : migration distincte, sur accord).
--- Compatible avec le site en ligne : il ne lit ni n'écrit la table relances (vérifié) ; aucune autre table n'est modifiée.
+-- Compatible avec le site en ligne : il ne lit ni n'écrit la table relances (vérifié) ; aucune autre table existante n'est
+-- modifiée ; une table est AJOUTÉE (relances_evenements).
 
 -- 0. Préalables -----------------------------------------------------------------------------------------------
 do $$
@@ -27,6 +33,9 @@ begin
    where version in ('20261027100000', '20261028100000');
   if v_nb <> 2 then
     raise exception 'Relances : les migrations Finance (20261027100000) et Absences (20261028100000) doivent être appliquées avant';
+  end if;
+  if to_regclass('public.relances_evenements') is not null then
+    raise exception 'Relances : la table relances_evenements existe déjà ; examen nécessaire';
   end if;
   select count(*) into v_nb from public.relances;
   if v_nb > 0 then
@@ -64,7 +73,7 @@ alter table public.relances
   add column if not exists premiere_tentative_le timestamptz,
   add column if not exists derniere_tentative_le timestamptz,
   add column if not exists limite_reprise timestamptz,       -- première tentative + 20 h, jamais renouvelée
-  add column if not exists compte_fournisseur text,          -- empreinte non réversible du compte utilisé (pas la clé)
+  add column if not exists compte_fournisseur text,          -- RÉFÉRENCE NON SECRÈTE du compte (configurée), 1re tentative
   add column if not exists accepte_le timestamptz,           -- acceptation par le fournisseur (réponse ou événement)
   add column if not exists fournisseur_id text,              -- identifiant de l'email chez le fournisseur
   add column if not exists livre_le timestamptz,             -- remis au serveur du destinataire (webhook vérifié)
@@ -113,7 +122,7 @@ alter table public.relances add constraint relances_rejet_date check (statut <> 
 alter table public.relances add constraint relances_historique_liste check (jsonb_typeof(historique) = 'array');
 alter table public.relances add constraint relances_empreintes_format
   check (requete_empreinte ~ '^[0-9a-f]{64}$' and pdf_empreinte ~ '^[0-9a-f]{64}$'
-         and (compte_fournisseur is null or compte_fournisseur ~ '^[0-9a-f]{16,64}$'));
+         and (compte_fournisseur is null or compte_fournisseur ~ '^[A-Za-z0-9._-]{3,64}$'));
 alter table public.relances add constraint relances_resolution_complete
   check ((resolu_le is null) = (resolu_par is null) and (resolu_le is null or length(btrim(coalesce(motif_resolution, ''))) >= 5));
 drop index if exists public.relances_cle_unique;
@@ -131,6 +140,44 @@ drop index if exists public.relances_une_non_resolue;
 create unique index relances_une_non_resolue on public.relances (facture_id)
   where (statut in ('reservee', 'en_cours', 'a_verifier', 'refusee') and resolu_le is null)
      or (statut = 'rejetee' and (resolu_le is null or resolu_le < rebond_le));
+
+-- 2b. Événements de livraison reçus (14e table, approuvée le 25/10/2026) : réception DURABLE des événements signés, en
+--     attente de rapprochement aussi longtemps que nécessaire. Seules les données utiles sont gardées : ni corps complet,
+--     ni destinataire, ni objet, ni signature, ni secret. Doublons : clé primaire = identifiant de l'événement chez le
+--     fournisseur (svix-id). Conservation : en attente jusqu'au rapprochement ou au classement « sans suite » par
+--     l'administrateur (jamais supprimé automatiquement) ; rapproché ou sans suite : supprimé 30 jours après.
+create table public.relances_evenements (
+  evenement_id text primary key,                 -- identifiant de l'événement chez le fournisseur (anti-doublon)
+  type text not null,                            -- email.sent, email.delivered, email.bounced…
+  fournisseur_id text,                           -- identifiant de l'email chez le fournisseur
+  relance_id uuid,                               -- étiquette de relance portée par l'événement (sans lien obligatoire)
+  compte_fournisseur text not null,              -- référence NON SECRÈTE du compte qui a signé l'événement
+  survenu_le timestamptz not null,               -- date de l'événement chez le fournisseur
+  detail text,                                   -- motif d'un rejet seulement (masqué s'il ressemble à un secret)
+  recu_le timestamptz not null default now(),    -- réception par le site
+  statut text not null default 'en_attente',
+  alerte text,                                   -- raison explicite d'un non-rapprochement (conflit, autre compte…)
+  rapproche_le timestamptz,
+  relance_rapprochee uuid,
+  classe_par uuid,                               -- classement « sans suite » par l'administrateur (motif obligatoire)
+  classe_par_nom text,
+  classe_le timestamptz,
+  motif_classement text,
+  constraint relances_evenements_identifiant check (length(evenement_id) between 1 and 100),
+  constraint relances_evenements_type check (type ~ '^email\.[a-z_]{1,34}$'),
+  constraint relances_evenements_fournisseur check (fournisseur_id is null or length(fournisseur_id) between 1 and 100),
+  constraint relances_evenements_cible check (fournisseur_id is not null or relance_id is not null),
+  constraint relances_evenements_compte check (compte_fournisseur ~ '^[A-Za-z0-9._-]{3,64}$'),
+  constraint relances_evenements_detail check (detail is null or length(detail) <= 300),
+  constraint relances_evenements_alerte check (alerte is null or length(alerte) <= 300),
+  constraint relances_evenements_statut check (statut in ('en_attente', 'rapproche', 'sans_suite')),
+  constraint relances_evenements_rapprochement
+    check ((statut = 'rapproche') = (rapproche_le is not null and relance_rapprochee is not null)),
+  constraint relances_evenements_classement
+    check ((statut = 'sans_suite') = (classe_le is not null) and (classe_le is null) = (classe_par is null)
+           and (classe_le is null or length(btrim(coalesce(motif_classement, ''))) >= 5)));
+create index relances_evenements_attente_fournisseur on public.relances_evenements (fournisseur_id) where statut = 'en_attente';
+create index relances_evenements_attente_relance on public.relances_evenements (relance_id) where statut = 'en_attente';
 
 -- 3. Outils internes -----------------------------------------------------------------------------------------------
 -- Paramètres approuvés (toute modification = nouvelle migration, sur accord de l'utilisateur).
@@ -619,8 +666,8 @@ begin
   if public.appel_utilisateur() then
     raise exception 'Réservé à l''application (clé secrète)';
   end if;
-  if coalesce(p_compte, '') !~ '^[0-9a-f]{16,64}$' then
-    raise exception 'Relance : empreinte du compte fournisseur absente ou mal formée.';
+  if coalesce(p_compte, '') !~ '^[A-Za-z0-9._-]{3,64}$' or public.relances_contient_secret(p_compte) then
+    raise exception 'Relance : référence du compte fournisseur absente ou mal formée (référence non secrète attendue).';
   end if;
   select * into f from public.factures where id = (select facture_id from public.relances where id = p_relance) for update;
   select * into v from public.relances where id = p_relance for update;
@@ -683,6 +730,18 @@ begin
 end
 $$;
 
+-- 5c-bis. Verrou de l'IDENTIFIANT d'un email chez le fournisseur (verrou de transaction, sans table) : pris par la réception
+--         d'un événement, l'enregistrement d'une réponse et le constat de l'administrateur, TOUJOURS avant le verrou de la
+--         relance (même ordre partout : pas d'interblocage). Sans lui, un événement sans étiquette reçu pendant
+--         l'enregistrement de la réponse resterait en attente jusqu'au balayage suivant (constaté en essai simultané).
+create or replace function public.relances_verrou_identifiant(p_fournisseur_id text)
+returns void
+language sql
+as $$
+  select case when nullif(btrim(coalesce(p_fournisseur_id, '')), '') is not null
+              then pg_advisory_xact_lock(hashtextextended('sgi-relances-email:' || btrim(p_fournisseur_id), 0)) end;
+$$;
+
 -- 5d. Résultat d'une tentative (réponse du fournisseur). Issues : « acceptee » (identifiant de l'email reçu),
 --     « temporaire » (réessayer plus tard, même demande, même clé), « refus » (refus certain, aucun email),
 --     « incertain » (à vérifier). Un résultat d'une tentative dépassée n'est retenu que s'il prouve l'acceptation.
@@ -707,6 +766,7 @@ begin
   if public.relances_contient_secret(v_erreur) then
     v_erreur := 'Message d''erreur masqué (donnée sensible possible).';
   end if;
+  perform public.relances_verrou_identifiant(p_fournisseur_id);
   select * into v from public.relances where id = p_relance for update;
   if not found then
     raise exception 'Relance introuvable.';
@@ -731,7 +791,8 @@ begin
                                 'apres', case when v.statut = 'en_cours' then null else v.statut end))
      where id = p_relance;
     perform public.relances_fin_contexte();
-    return jsonb_build_object('statut', 'acceptee');
+    -- Événements reçus avant l'enregistrement de cet identifiant : rapprochés maintenant (aucun envoi).
+    return jsonb_build_object('statut', 'acceptee', 'evenements_rapproches', public.relances_rapprocher_relance(p_relance));
   end if;
   -- Issues sans acceptation : seulement pour la tentative en cours.
   if v.statut <> 'en_cours' or p_tentative is distinct from v.tentatives::integer then
@@ -749,84 +810,340 @@ begin
 end
 $$;
 
--- 5e. Événements de livraison (webhook signé, vérifié par la route). Recherchés par l'étiquette de la relance, sinon par
---     l'identifiant de l'email. Un événement déjà reçu est ignoré ; aucun ne fait régresser un état ; un rejet définitif
---     n'est jamais effacé. Événement impossible à rapprocher ALORS qu'une relance tentée attend encore son identifiant
---     (réponse du fournisseur pas encore enregistrée) : « en_attente », rien n'est écrit ; la route répond 503 et le
---     fournisseur le RENVOIE (même identifiant d'événement), rapproché dès l'enregistrement de l'identifiant. Limité aux
---     relances tentées depuis moins de 28 h (durée des renvois) ; au-delà, l'événement est ignoré (jamais de refus sans fin).
-create or replace function public.relances_evenement_livraison(p_evenement_id text, p_type text, p_fournisseur_id text,
-  p_relance uuid, p_survenu_le timestamptz, p_detail text)
+-- 5e. Événements de livraison : réception DURABLE (table relances_evenements), puis rapprochement.
+-- 5e-1. Application d'un événement à SA relance (verrouillée par l'appelant). Jamais d'envoi, jamais de reprise : seuls
+--        l'état, l'acceptation, la livraison et le rejet sont constatés ; un événement déjà présent dans l'historique de la
+--        relance (y compris après la suppression de sa ligne) est sans effet ; aucun état ne régresse.
+create or replace function public.relances_appliquer_evenement(p_evenement text, p_relance uuid)
+returns text
+language plpgsql
+set search_path = public
+as $$
+declare
+  e public.relances_evenements;
+  v public.relances;
+  v_statut text;
+begin
+  select * into e from public.relances_evenements where evenement_id = p_evenement;
+  select * into v from public.relances where id = p_relance;
+  if exists (select 1 from jsonb_array_elements(v.historique) x where x ->> 'evenement_id' = e.evenement_id) then
+    return 'deja_applique';
+  end if;
+  v_statut := v.statut;
+  if e.type in ('email.sent', 'email.delivered', 'email.bounced') and v.statut in ('en_cours', 'a_verifier', 'abandonnee') then
+    v_statut := 'acceptee';
+  end if;
+  if e.type = 'email.bounced' and v.rebond_le is null then
+    v_statut := 'rejetee';
+  end if;
+  perform public.relances_contexte('evenement');
+  update public.relances
+     set statut = v_statut,
+         fournisseur_id = coalesce(fournisseur_id, e.fournisseur_id),
+         accepte_le = case when v_statut in ('acceptee', 'rejetee') then coalesce(accepte_le, e.survenu_le) else accepte_le end,
+         date_envoi = case when v_statut in ('acceptee', 'rejetee') then coalesce(date_envoi, e.survenu_le) else date_envoi end,
+         livre_le = case when e.type = 'email.delivered' and v_statut <> 'rejetee' and v.rebond_le is null
+                         then coalesce(livre_le, e.survenu_le) else livre_le end,
+         rebond_le = case when e.type = 'email.bounced' then coalesce(rebond_le, e.survenu_le) else rebond_le end,
+         rebond_motif = case when e.type = 'email.bounced' then coalesce(rebond_motif, e.detail, 'Rejet définitif') else rebond_motif end,
+         historique = historique || public.relances_evenement('evenement',
+           jsonb_build_object('evenement_id', e.evenement_id, 'type', e.type, 'survenu_le', e.survenu_le, 'detail', e.detail,
+                              'recu_le', e.recu_le))
+   where id = v.id;
+  perform public.relances_fin_contexte();
+  return 'applique';
+end
+$$;
+
+-- 5e-2. Rapprochement d'UN événement en attente. Verrous : l'événement (ignoré s'il est déjà pris par un autre traitement),
+--        puis la relance. Jamais appliqué — il reste en attente avec une ALERTE explicite — si : l'étiquette et
+--        l'identifiant fournisseur désignent deux relances différentes ; la relance porte un autre identifiant ; elle n'a
+--        jamais été tentée ; le compte fournisseur diffère ; elle a été refusée (aucun email) ; ou elle a été abandonnée
+--        puis remplacée par une nouvelle relance du même rang.
+create or replace function public.relances_rapprocher_evenement(p_evenement text)
 returns jsonb
 language plpgsql
 set search_path = public
 as $$
 declare
-  v public.relances;
+  e public.relances_evenements;
+  v_tag uuid;
+  v_id uuid;
+  v_cible uuid;
+  c public.relances;
+  v_alerte text;
+  v_application text;
+begin
+  select * into e from public.relances_evenements where evenement_id = p_evenement for update skip locked;
+  if not found then
+    return jsonb_build_object('resultat', 'occupe');
+  end if;
+  if e.statut <> 'en_attente' then
+    return jsonb_build_object('resultat', e.statut, 'relance_id', e.relance_rapprochee);
+  end if;
+  if e.relance_id is not null then
+    select id into v_tag from public.relances where id = e.relance_id;
+  end if;
+  if e.fournisseur_id is not null then
+    select id into v_id from public.relances where fournisseur_id = e.fournisseur_id;
+  end if;
+  -- Conflit lu sur l'étiquette REÇUE (que la relance qu'elle désigne existe encore ou non).
+  if e.relance_id is not null and v_id is not null and e.relance_id <> v_id then
+    v_alerte := format('Conflit : l''étiquette désigne la relance %s et l''identifiant fournisseur la relance %s ; événement non appliqué.', e.relance_id, v_id);
+  else
+    v_cible := coalesce(v_id, v_tag);
+    if v_cible is not null then
+      select * into c from public.relances where id = v_cible for update;
+      if c.fournisseur_id is not null and e.fournisseur_id is not null and c.fournisseur_id <> e.fournisseur_id then
+        v_alerte := format('Conflit : la relance %s porte un autre identifiant fournisseur ; événement non appliqué.', c.id);
+      elsif c.compte_fournisseur is null then
+        v_alerte := format('La relance %s n''a jamais été tentée : événement non appliqué.', c.id);
+      elsif c.compte_fournisseur <> e.compte_fournisseur then
+        v_alerte := format('Compte fournisseur différent (événement : %s ; relance : %s) : événement non appliqué.',
+                           e.compte_fournisseur, c.compte_fournisseur);
+      elsif c.statut = 'refusee' then
+        v_alerte := format('La relance %s a été refusée par le fournisseur (aucun email) : événement non appliqué.', c.id);
+      elsif c.statut = 'abandonnee' and exists (select 1 from public.relances r where r.facture_id = c.facture_id
+              and r.rang = c.rang and r.id <> c.id and r.statut not in ('abandonnee', 'refusee')) then
+        v_alerte := format('La relance %s, abandonnée, a été remplacée par une nouvelle relance du même rang : à vérifier.', c.id);
+      else
+        v_application := public.relances_appliquer_evenement(e.evenement_id, c.id);
+        perform public.relances_contexte('rapprocher');
+        update public.relances_evenements
+           set statut = 'rapproche', rapproche_le = public.relances_maintenant(), relance_rapprochee = c.id, alerte = null
+         where evenement_id = e.evenement_id;
+        perform public.relances_fin_contexte();
+        return jsonb_build_object('resultat', 'rapproche', 'relance_id', c.id, 'application', v_application);
+      end if;
+    end if;
+  end if;
+  if v_alerte is distinct from e.alerte then
+    perform public.relances_contexte('rapprocher');
+    update public.relances_evenements set alerte = v_alerte where evenement_id = e.evenement_id;
+    perform public.relances_fin_contexte();
+  end if;
+  return jsonb_build_object('resultat', 'en_attente', 'alerte', v_alerte);
+end
+$$;
+
+-- 5e-3. Rapprochement des événements en attente d'UNE relance (dans l'ordre de leur date), appelé dès que son identifiant
+--        fournisseur est connu (acceptation, constat de l'administrateur, événement étiqueté).
+create or replace function public.relances_rapprocher_relance(p_relance uuid)
+returns integer
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_ev record;
+  v_n integer := 0;
+begin
+  for v_ev in
+    select e.evenement_id from public.relances_evenements e, public.relances r
+     where r.id = p_relance and e.statut = 'en_attente'
+       and (e.relance_id = r.id or (r.fournisseur_id is not null and e.fournisseur_id = r.fournisseur_id))
+     order by e.survenu_le, e.evenement_id
+     for update of e skip locked
+  loop
+    if public.relances_rapprocher_evenement(v_ev.evenement_id) ->> 'resultat' = 'rapproche' then
+      v_n := v_n + 1;
+    end if;
+  end loop;
+  return v_n;
+end
+$$;
+
+-- 5e-4. Réception d'un événement signé (la route a vérifié la signature) : ENREGISTRÉ d'abord, puis rapproché si possible.
+--        Même identifiant reçu deux fois : « déjà », rien ne change. Renvoyé après la suppression de sa ligne : réenregistré ;
+--        rapproché d'une relance qui l'a déjà appliqué, il est sans effet ; ancien « sans suite » : de nouveau en attente.
+create or replace function public.relances_recevoir_evenement(p_evenement_id text, p_type text, p_fournisseur_id text,
+  p_relance uuid, p_survenu_le timestamptz, p_detail text, p_compte text)
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
   v_detail text := left(nullif(btrim(coalesce(p_detail, '')), ''), 300);
-  v_statut text;
-  v_anomalie boolean := false;
+  v_n integer;
+  v_res jsonb;
 begin
   if public.appel_utilisateur() then
     raise exception 'Réservé à l''application (clé secrète)';
   end if;
-  if coalesce(btrim(p_evenement_id), '') = '' or p_survenu_le is null or coalesce(btrim(p_type), '') = '' then
+  if coalesce(btrim(p_evenement_id), '') = '' or p_survenu_le is null or coalesce(p_type, '') !~ '^email\.[a-z_]{1,34}$'
+     or (nullif(btrim(coalesce(p_fournisseur_id, '')), '') is null and p_relance is null) then
     raise exception 'Événement de livraison incomplet.';
+  end if;
+  if coalesce(p_compte, '') !~ '^[A-Za-z0-9._-]{3,64}$' or public.relances_contient_secret(p_compte) then
+    raise exception 'Événement : référence du compte fournisseur absente ou mal formée (référence non secrète attendue).';
   end if;
   if public.relances_contient_secret(v_detail) then
     v_detail := 'Détail masqué (donnée sensible possible).';
   end if;
-  -- Par l'étiquette d'abord (sans condition sur l'identifiant : une réponse du fournisseur enregistrée au même moment
-  -- ne doit pas faire perdre l'événement), sinon par l'identifiant de l'email.
-  if p_relance is not null then
-    select * into v from public.relances where id = p_relance for update;
-  end if;
-  if v.id is null then
-    select * into v from public.relances where fournisseur_id = p_fournisseur_id for update;
-  end if;
-  if v.id is null then
-    -- Seulement pendant la durée des renvois du fournisseur (≈ 27 h 30 ; 28 h) : jamais de refus sans fin.
-    if exists (select 1 from public.relances r where r.fournisseur_id is null and r.tentatives > 0
-                 and r.statut in ('en_cours', 'a_verifier')
-                 and r.derniere_tentative_le > public.relances_maintenant() - interval '28 hours') then
-      return jsonb_build_object('resultat', 'en_attente');
-    end if;
-    return jsonb_build_object('resultat', 'inconnu');
-  end if;
-  if exists (select 1 from jsonb_array_elements(v.historique) e where e ->> 'evenement_id' = p_evenement_id) then
-    return jsonb_build_object('resultat', 'deja', 'statut', v.statut);
-  end if;
-  v_statut := v.statut;
-  if v.statut in ('reservee', 'refusee')
-     or (v.fournisseur_id is not null and v.fournisseur_id is distinct from p_fournisseur_id) then
-    v_anomalie := true;       -- aucune tentative, refus certain, ou autre email : événement seulement consigné (anomalie)
-  else
-    if p_type in ('email.sent', 'email.delivered', 'email.bounced') and v.statut in ('en_cours', 'a_verifier', 'abandonnee') then
-      v_statut := 'acceptee';
-    end if;
-    if p_type = 'email.bounced' and v.rebond_le is null then
-      v_statut := 'rejetee';
-    end if;
-  end if;
-  perform public.relances_contexte('evenement');
-  update public.relances
-     set statut = v_statut,
-         fournisseur_id = coalesce(fournisseur_id, case when not v_anomalie then p_fournisseur_id end),
-         accepte_le = case when v_statut in ('acceptee', 'rejetee') then coalesce(accepte_le, p_survenu_le) else accepte_le end,
-         date_envoi = case when v_statut in ('acceptee', 'rejetee') then coalesce(date_envoi, p_survenu_le) else date_envoi end,
-         livre_le = case when p_type = 'email.delivered' and not v_anomalie and v_statut <> 'rejetee' and v.rebond_le is null
-                         then coalesce(livre_le, p_survenu_le) else livre_le end,
-         rebond_le = case when p_type = 'email.bounced' and not v_anomalie then coalesce(rebond_le, p_survenu_le) else rebond_le end,
-         rebond_motif = case when p_type = 'email.bounced' and not v_anomalie
-                             then coalesce(rebond_motif, v_detail, 'Rejet définitif') else rebond_motif end,
-         historique = historique || public.relances_evenement('evenement',
-           jsonb_build_object('evenement_id', p_evenement_id, 'type', p_type, 'survenu_le', p_survenu_le,
-                              'detail', v_detail, 'anomalie', v_anomalie))
-   where id = v.id;
+  -- Avant tout autre verrou : attend la fin d'un enregistrement de réponse portant le même identifiant.
+  perform public.relances_verrou_identifiant(p_fournisseur_id);
+  perform public.relances_contexte('recevoir');
+  insert into public.relances_evenements (evenement_id, type, fournisseur_id, relance_id, compte_fournisseur, survenu_le, detail)
+  values (btrim(p_evenement_id), p_type, nullif(btrim(coalesce(p_fournisseur_id, '')), ''), p_relance, p_compte, p_survenu_le, v_detail)
+  on conflict (evenement_id) do nothing;
+  get diagnostics v_n = row_count;
   perform public.relances_fin_contexte();
-  return jsonb_build_object('resultat', 'enregistre', 'statut', v_statut, 'relance_id', v.id);
+  if v_n = 0 then
+    return jsonb_build_object('resultat', 'deja', 'statut',
+      (select statut from public.relances_evenements where evenement_id = btrim(p_evenement_id)));
+  end if;
+  v_res := public.relances_rapprocher_evenement(btrim(p_evenement_id));
+  if v_res ->> 'resultat' = 'rapproche' then
+    perform public.relances_rapprocher_relance((v_res ->> 'relance_id')::uuid);
+  end if;
+  return v_res || jsonb_build_object('enregistre', true);
 end
 $$;
+
+-- 5e-5. Balayage de tous les événements en attente (à chaque exécution des relances) : rattrape un rapprochement manqué
+--        (réception et réponse du fournisseur simultanées, incident prolongé). Aucun envoi.
+create or replace function public.relances_rapprocher_tout()
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_ev record;
+  v_res jsonb;
+  v_examines integer := 0;
+  v_rapproches integer := 0;
+begin
+  if public.appel_utilisateur() then
+    raise exception 'Réservé à l''application (clé secrète)';
+  end if;
+  for v_ev in select evenement_id from public.relances_evenements where statut = 'en_attente' order by survenu_le, evenement_id loop
+    v_examines := v_examines + 1;
+    v_res := public.relances_rapprocher_evenement(v_ev.evenement_id);
+    if v_res ->> 'resultat' = 'rapproche' then
+      v_rapproches := v_rapproches + 1;
+      v_rapproches := v_rapproches + public.relances_rapprocher_relance((v_res ->> 'relance_id')::uuid);
+    end if;
+  end loop;
+  return jsonb_build_object('examines', v_examines, 'rapproches', v_rapproches,
+    'en_attente', (select count(*) from public.relances_evenements where statut = 'en_attente'),
+    'alertes', (select count(*) from public.relances_evenements where statut = 'en_attente' and alerte is not null));
+end
+$$;
+
+-- 5e-6. Classement « sans suite » d'un événement en attente (administrateur, motif obligatoire, tracé). Jamais automatique.
+create or replace function public.relances_classer_evenement(p_admin uuid, p_evenement text, p_motif text)
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_nom text;
+  v_statut text;
+begin
+  if public.appel_utilisateur() then
+    raise exception 'Réservé à l''application (clé secrète)';
+  end if;
+  v_nom := public.verifier_auteur_finance(p_admin);
+  if length(btrim(coalesce(p_motif, ''))) < 5 then
+    raise exception 'Classement : motif obligatoire (5 caractères au moins).';
+  end if;
+  select statut into v_statut from public.relances_evenements where evenement_id = p_evenement for update;
+  if v_statut is null then
+    raise exception 'Événement introuvable.';
+  end if;
+  if v_statut <> 'en_attente' then
+    raise exception 'Classement : seul un événement en attente se classe sans suite.';
+  end if;
+  perform public.relances_contexte('classer');
+  update public.relances_evenements
+     set statut = 'sans_suite', classe_par = p_admin, classe_par_nom = v_nom, classe_le = public.relances_maintenant(),
+         motif_classement = btrim(p_motif)
+   where evenement_id = p_evenement;
+  perform public.relances_fin_contexte();
+  return jsonb_build_object('statut', 'sans_suite');
+end
+$$;
+
+-- 5e-7. Nettoyage : événements rapprochés ou sans suite depuis plus de 30 jours (un événement en attente n'est JAMAIS
+--        supprimé automatiquement). Un événement rapproché reste copié dans l'historique de sa relance.
+create or replace function public.relances_purger_evenements()
+returns integer
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_n integer;
+begin
+  if public.appel_utilisateur() then
+    raise exception 'Réservé à l''application (clé secrète)';
+  end if;
+  perform public.relances_contexte('purge');
+  delete from public.relances_evenements
+   where (statut = 'rapproche' and rapproche_le < public.relances_maintenant() - interval '30 days')
+      or (statut = 'sans_suite' and classe_le < public.relances_maintenant() - interval '30 days');
+  get diagnostics v_n = row_count;
+  perform public.relances_fin_contexte();
+  return v_n;
+end
+$$;
+
+-- 5e-8. Déclencheur de la table des événements : toutes les règles, quel que soit le chemin (tableau de bord compris).
+create or replace function public.relances_evenements_controle()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_op text := coalesce(current_setting('sgi.rel_operation', true), '');
+begin
+  if public.appel_utilisateur() then
+    raise exception 'Événements : écriture directe interdite.';
+  end if;
+  if tg_op = 'DELETE' then
+    if v_op = 'purge' and ((old.statut = 'rapproche' and old.rapproche_le < public.relances_maintenant() - interval '30 days')
+                           or (old.statut = 'sans_suite' and old.classe_le < public.relances_maintenant() - interval '30 days')) then
+      return old;
+    end if;
+    if coalesce(current_setting('sgi.fin_operation', true), '') = 'nettoyage_essais'
+       and exists (select 1 from public.relances r where r.essai
+                     and (r.id = old.relance_rapprochee or r.id = old.relance_id
+                          or (old.fournisseur_id is not null and r.fournisseur_id = old.fournisseur_id))) then
+      return old;
+    end if;
+    raise exception 'Un événement reçu ne se supprime pas (nettoyage : 30 jours après son rapprochement ou son classement).';
+  end if;
+  if tg_op = 'INSERT' then
+    if v_op <> 'recevoir' or new.statut <> 'en_attente' or new.alerte is not null or new.rapproche_le is not null
+       or new.relance_rapprochee is not null or new.classe_le is not null or new.classe_par is not null then
+      raise exception 'Un événement naît uniquement de la réception par l''application.';
+    end if;
+    if public.relances_contient_secret(coalesce(new.detail, '') || ' ' || new.compte_fournisseur || ' ' || new.evenement_id) then
+      raise exception 'Événement : un secret d''authentification ne doit jamais être enregistré.';
+    end if;
+    new.recu_le := public.relances_maintenant();
+    return new;
+  end if;
+  if (new.evenement_id, new.type, new.fournisseur_id, new.relance_id, new.compte_fournisseur, new.survenu_le, new.detail, new.recu_le)
+     is distinct from
+     (old.evenement_id, old.type, old.fournisseur_id, old.relance_id, old.compte_fournisseur, old.survenu_le, old.detail, old.recu_le) then
+    raise exception 'Événement : le contenu reçu ne se modifie jamais.';
+  end if;
+  if old.statut <> 'en_attente' then
+    raise exception 'Événement déjà traité (%) : figé.', old.statut;
+  end if;
+  if not ((v_op = 'rapprocher' and new.statut in ('en_attente', 'rapproche') and new.classe_le is null)
+          or (v_op = 'classer' and new.statut = 'sans_suite')) then
+    raise exception 'Événement : changement réservé à l''application (rapprochement ou classement par l''administrateur).';
+  end if;
+  if public.relances_contient_secret(new.alerte) or public.relances_contient_secret(new.motif_classement) then
+    raise exception 'Événement : un secret d''authentification ne doit jamais être enregistré.';
+  end if;
+  return new;
+end
+$$;
+drop trigger if exists relances_evenements_controle on public.relances_evenements;
+create trigger relances_evenements_controle before insert or update or delete on public.relances_evenements
+  for each row execute function public.relances_evenements_controle();
 
 -- 5f. Résolution par l'administrateur (motif obligatoire, tracée ; jamais de renvoi) :
 --     « email_accepte » (constaté dans le tableau de bord du fournisseur, date de l'envoi constatée) ;
@@ -851,6 +1168,7 @@ begin
   if length(btrim(coalesce(p_motif, ''))) < 5 then
     raise exception 'Résolution : motif obligatoire (5 caractères au moins).';
   end if;
+  perform public.relances_verrou_identifiant(p_fournisseur_id);
   select * into v from public.relances where id = p_relance for update;
   if not found then
     raise exception 'Relance introuvable.';
@@ -897,7 +1215,8 @@ begin
                                 else jsonb_build_object('le', v.resolu_le, 'par', v.resolu_par_nom, 'motif', v.motif_resolution) end))
    where id = p_relance;
   perform public.relances_fin_contexte();
-  return jsonb_build_object('statut', v_statut);
+  -- Identifiant fourni par le constat : les événements reçus pour cet email sont rapprochés (aucun envoi, aucune reprise).
+  return jsonb_build_object('statut', v_statut, 'evenements_rapproches', public.relances_rapprocher_relance(p_relance));
 end
 $$;
 
@@ -960,6 +1279,7 @@ declare
   v_nb_temps integer;
   v_nb_compteurs integer;
   v_nb_relances integer;
+  v_nb_evenements integer;
 begin
   if public.appel_utilisateur() then
     raise exception 'Réservé aux essais autorisés (clé secrète)';
@@ -976,6 +1296,10 @@ begin
   end if;
   perform public.rh_fin_contexte();
   perform public.finance_contexte('nettoyage_essais', null, null);
+  delete from public.relances_evenements e using public.relances r
+   where r.facture_id = any(v_factures)
+     and (e.relance_rapprochee = r.id or e.relance_id = r.id or (e.fournisseur_id is not null and e.fournisseur_id = r.fournisseur_id));
+  get diagnostics v_nb_evenements = row_count;
   delete from public.relances where facture_id = any(v_factures);
   get diagnostics v_nb_relances = row_count;
   delete from public.temps where facture_id = any(v_factures);
@@ -985,7 +1309,7 @@ begin
   get diagnostics v_nb_compteurs = row_count;
   perform public.finance_fin_contexte();
   return jsonb_build_object('factures', cardinality(v_factures), 'temps', v_nb_temps, 'compteurs', v_nb_compteurs,
-                            'relances', v_nb_relances, 'pdf_chemins', to_jsonb(v_chemins));
+                            'relances', v_nb_relances, 'evenements', v_nb_evenements, 'pdf_chemins', to_jsonb(v_chemins));
 end
 $$;
 
@@ -1000,12 +1324,14 @@ begin
     'relances_contexte(text)', 'relances_fin_contexte()', 'relances_evenement(text, jsonb)', 'relances_situation(uuid)',
     'relances_controle_requete(jsonb, uuid, uuid)', 'relances_controle()', 'relances_apercu()',
     'relances_reserver(uuid, uuid, integer, jsonb)', 'relances_prendre(uuid, text)',
-    'relances_resultat(uuid, integer, text, text, text)',
-    'relances_evenement_livraison(text, text, text, uuid, timestamptz, text)',
+    'relances_resultat(uuid, integer, text, text, text)', 'relances_verrou_identifiant(text)',
+    'relances_appliquer_evenement(text, uuid)', 'relances_rapprocher_evenement(text)', 'relances_rapprocher_relance(uuid)',
+    'relances_recevoir_evenement(text, text, text, uuid, timestamptz, text, text)', 'relances_rapprocher_tout()',
+    'relances_classer_evenement(uuid, text, text)', 'relances_purger_evenements()', 'relances_evenements_controle()',
     'relances_resoudre(uuid, uuid, text, text, timestamptz, text)', 'relances_a_reprendre()',
     'relances_declencher()', 'supprimer_essais_finance()'] loop
     execute format('revoke all on function public.%s from public, anon, authenticated', v_fonction);
-    if v_fonction not in ('relances_controle()', 'relances_declencher()') then
+    if v_fonction not in ('relances_controle()', 'relances_declencher()', 'relances_evenements_controle()') then
       execute format('grant execute on function public.%s to service_role', v_fonction);
     end if;
   end loop;
@@ -1027,6 +1353,12 @@ end
 $$;
 create policy "relances_lecture_admin" on public.relances for select to authenticated using ((select public.est_admin()));
 revoke all on public.relances from anon, authenticated;
+-- Événements : mêmes droits (aucun pour les jetons, même admin ; règle de défense en lecture admin).
+alter table public.relances_evenements enable row level security;
+create policy "relances_evenements_lecture_admin" on public.relances_evenements for select to authenticated
+  using ((select public.est_admin()));
+revoke all on public.relances_evenements from public, anon, authenticated;
+grant select, insert, update, delete on public.relances_evenements to service_role;
 
 -- 7. Contrôles finaux et autotest (annulé) ----------------------------------------------------------------------------
 do $$
@@ -1048,7 +1380,7 @@ declare
                          -- du moment où la migration s'applique (week-end, nuit)
   v_req jsonb;
   v_res jsonb;
-  v_compte text := repeat('ab', 16);
+  v_compte text := 'compte-autotest';
   v_avant text;
   v_apres text;
 begin
@@ -1084,6 +1416,17 @@ begin
      or has_table_privilege('authenticated', 'public.relances', 'update') or has_table_privilege('authenticated', 'public.relances', 'delete')
      or has_table_privilege('anon', 'public.relances', 'select') or has_table_privilege('anon', 'public.relances', 'insert') then
     raise exception 'Relances : droits sur la table relances pour un jeton';
+  end if;
+  -- 14e table : aucun droit pour les jetons, RLS active, déclencheur posé, vide.
+  if has_table_privilege('authenticated', 'public.relances_evenements', 'select')
+     or has_table_privilege('authenticated', 'public.relances_evenements', 'insert')
+     or has_table_privilege('authenticated', 'public.relances_evenements', 'update')
+     or has_table_privilege('authenticated', 'public.relances_evenements', 'delete')
+     or has_table_privilege('anon', 'public.relances_evenements', 'select') or has_table_privilege('anon', 'public.relances_evenements', 'insert')
+     or not (select relrowsecurity from pg_class where oid = 'public.relances_evenements'::regclass)
+     or not exists (select 1 from pg_trigger where tgname = 'relances_evenements_controle' and not tgisinternal)
+     or exists (select 1 from public.relances_evenements) then
+    raise exception 'Relances : table relances_evenements mal protégée ou non vide';
   end if;
   -- Déclenchement : propriétaire postgres, aucun autre rôle (ni PUBLIC, ni jetons, ni clé secrète).
   select pg_get_userbyid(p.proowner) into v_liste from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -1141,7 +1484,8 @@ begin
   select md5(coalesce((select string_agg(r::text, '|' order by r.id) from public.relances r), '')
           || coalesce((select string_agg(f::text, '|' order by f.id) from public.factures f), '')
           || coalesce((select string_agg(c::text, '|' order by c.id) from public.clients c), '')
-          || coalesce((select string_agg(c::text, '|' order by c.cle) from public.compteurs c), ''))
+          || coalesce((select string_agg(c::text, '|' order by c.cle) from public.compteurs c), '')
+          || coalesce((select string_agg(e::text, '|' order by e.evenement_id) from public.relances_evenements e), ''))
     into v_avant;
   select id into v_admin from public.profiles where role = 'admin' order by created_at limit 1;
   if v_admin is null then
@@ -1272,7 +1616,7 @@ begin
     perform set_config('sgi.rel_autotest_maintenant', (v_lundi + interval '18 hours')::text, true);  -- mardi 9 h (limite : 11 h)
     -- Compte fournisseur changé : jamais de reprise.
     begin
-      v_res := public.relances_prendre(v_r1, repeat('cd', 16));
+      v_res := public.relances_prendre(v_r1, 'autre-compte-autotest');
       if v_res ->> 'statut' is distinct from 'a_verifier' then
         raise exception 'AUTOTEST: reprise avec un autre compte (%)', v_res;
       end if;
@@ -1282,19 +1626,45 @@ begin
     if v_res ->> 'action' is distinct from 'envoyer' or v_res ->> 'requete_texte' is distinct from v_req::text then
       raise exception 'AUTOTEST: reprise sans la demande figée (%)', v_res;
     end if;
-    -- Événement SANS étiquette arrivé avant l'enregistrement de l'identifiant : « en attente », rien d'écrit.
-    v_res := public.relances_evenement_livraison('evt-0', 'email.delivered', 'email-autotest-1', null, v_lundi + interval '18 hours', null);
+    -- Événement SANS étiquette arrivé avant l'enregistrement de l'identifiant : CONSERVÉ en attente, relance inchangée.
+    v_res := public.relances_recevoir_evenement('evt-0', 'email.delivered', 'email-autotest-1', null, v_lundi + interval '18 hours', null, v_compte);
     if v_res ->> 'resultat' is distinct from 'en_attente'
+       or (select statut from public.relances_evenements where evenement_id = 'evt-0') is distinct from 'en_attente'
        or coalesce((select fournisseur_id is not null or livre_le is not null or jsonb_array_length(historique) <> 3
                       from public.relances where id = v_r1), true) then
       raise exception 'AUTOTEST: événement précoce sans étiquette mal traité (%)', v_res;
     end if;
+    -- Même événement reçu deux fois : « déjà », une seule ligne.
+    if public.relances_recevoir_evenement('evt-0', 'email.delivered', 'email-autotest-1', null, v_lundi + interval '18 hours', null, v_compte)
+         ->> 'resultat' is distinct from 'deja' then
+      raise exception 'AUTOTEST: événement en double non reconnu';
+    end if;
+    -- Acceptation enregistrée : l'événement conservé est rapproché aussitôt (aucun envoi).
     v_res := public.relances_resultat(v_r1, 2, 'acceptee', 'email-autotest-1', null);
-    -- Le même événement, renvoyé par le fournisseur après l'enregistrement : rapproché.
-    v_res := public.relances_evenement_livraison('evt-0', 'email.delivered', 'email-autotest-1', null, v_lundi + interval '18 hours', null);
-    if v_res ->> 'resultat' is distinct from 'enregistre'
-       or coalesce((select livre_le is distinct from v_lundi + interval '18 hours' from public.relances where id = v_r1), true) then
-      raise exception 'AUTOTEST: événement renvoyé non rapproché (%)', v_res;
+    if (v_res ->> 'evenements_rapproches')::int is distinct from 1
+       or (select statut from public.relances_evenements where evenement_id = 'evt-0') is distinct from 'rapproche'
+       or coalesce((select livre_le is distinct from v_lundi + interval '18 hours' or tentatives <> 2 from public.relances where id = v_r1), true) then
+      raise exception 'AUTOTEST: événement conservé non rapproché à l''acceptation (%)', v_res;
+    end if;
+    -- Étiquette et identifiant désignant deux relances différentes : non appliqué, en attente avec alerte.
+    v_res := public.relances_recevoir_evenement('evt-conflit', 'email.bounced', 'email-autotest-1', v_r4, v_lundi + interval '18 hours 2 minutes', null, v_compte);
+    if v_res ->> 'resultat' is distinct from 'en_attente' or coalesce(v_res ->> 'alerte', '') not like 'Conflit :%'
+       or coalesce((select rebond_le is not null from public.relances where id = v_r1), true) then
+      raise exception 'AUTOTEST: conflit étiquette / identifiant appliqué (%)', v_res;
+    end if;
+    -- Autre compte fournisseur : non appliqué, en attente avec alerte.
+    v_res := public.relances_recevoir_evenement('evt-compte', 'email.bounced', 'email-autotest-1', null, v_lundi + interval '18 hours 3 minutes', null, 'autre-compte');
+    if coalesce(v_res ->> 'alerte', '') not like 'Compte fournisseur différent%'
+       or coalesce((select rebond_le is not null from public.relances where id = v_r1), true) then
+      raise exception 'AUTOTEST: événement d''un autre compte appliqué (%)', v_res;
+    end if;
+    -- Référence de compte ressemblant à une clé : refusée (rien enregistré), même sans aucune relance correspondante.
+    begin
+      perform public.relances_recevoir_evenement('evt-cle', 'email.sent', 'email-autotest-inconnu', null, v_lundi, null, 're_cleautotest123');
+      raise exception 'AUTOTEST: référence de compte secrète acceptée';
+    exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
+    if exists (select 1 from public.relances_evenements where evenement_id = 'evt-cle') then
+      raise exception 'AUTOTEST: référence de compte secrète acceptée';
     end if;
     -- Acceptée aujourd'hui (mardi) : aucune autre relance de cette facture aujourd'hui, et 8 jours d'écart.
     if coalesce((select date_envoi is distinct from v_lundi + interval '18 hours' or statut is distinct from 'acceptee'
@@ -1335,14 +1705,30 @@ begin
     exception when others then if sqlerrm like 'AUTOTEST:%' then raise; end if; end;
     perform public.relances_fin_contexte();
     -- Événements en double, en retard, dans le désordre : un rejet définitif n'est jamais effacé.
-    perform public.relances_evenement_livraison('evt-1', 'email.bounced', 'email-autotest-1', null, v_lundi + interval '18 hours 1 minute', 'Boîte inexistante');
-    perform public.relances_evenement_livraison('evt-2', 'email.delivered', 'email-autotest-1', null, v_lundi + interval '18 hours', null);
-    perform public.relances_evenement_livraison('evt-1', 'email.bounced', 'email-autotest-1', null, v_lundi + interval '18 hours 1 minute', 'Boîte inexistante');
-    perform public.relances_evenement_livraison('evt-3', 'email.sent', 'email-autotest-1', null, v_lundi + interval '18 hours', null);
+    perform public.relances_recevoir_evenement('evt-1', 'email.bounced', 'email-autotest-1', null, v_lundi + interval '18 hours 1 minute', 'Boîte inexistante', v_compte);
+    perform public.relances_recevoir_evenement('evt-2', 'email.delivered', 'email-autotest-1', null, v_lundi + interval '18 hours', null, v_compte);
+    perform public.relances_recevoir_evenement('evt-1', 'email.bounced', 'email-autotest-1', null, v_lundi + interval '18 hours 1 minute', 'Boîte inexistante', v_compte);
+    perform public.relances_recevoir_evenement('evt-3', 'email.sent', 'email-autotest-1', null, v_lundi + interval '18 hours', null, v_compte);
     if coalesce((select statut is distinct from 'rejetee' or livre_le is distinct from v_lundi + interval '18 hours' or rebond_le is null
               or (select count(*) from jsonb_array_elements(historique) e where e ->> 'action' = 'evenement') <> 4
           from public.relances where id = v_r1), true) then
       raise exception 'AUTOTEST: événements de livraison mal traités';
+    end if;
+    -- Nettoyage à 30 jours : rapprochés supprimés, en attente JAMAIS ; renvoi d'un événement supprimé : sans effet.
+    perform set_config('sgi.rel_autotest_maintenant', (v_lundi + interval '20 days')::text, true);
+    if public.relances_purger_evenements() <> 0 then
+      raise exception 'AUTOTEST: événements supprimés avant 30 jours';
+    end if;
+    perform set_config('sgi.rel_autotest_maintenant', (v_lundi + interval '40 days')::text, true);
+    if public.relances_purger_evenements() <> 4
+       or (select count(*) from public.relances_evenements where evenement_id in ('evt-conflit', 'evt-compte') and statut = 'en_attente') <> 2 then
+      raise exception 'AUTOTEST: nettoyage des événements incorrect';
+    end if;
+    v_res := public.relances_recevoir_evenement('evt-1', 'email.bounced', 'email-autotest-1', null, v_lundi + interval '18 hours 1 minute', 'Boîte inexistante', v_compte);
+    if v_res ->> 'application' is distinct from 'deja_applique'
+       or coalesce((select (select count(*) from jsonb_array_elements(historique) e where e ->> 'action' = 'evenement') <> 4
+                      from public.relances where id = v_r1), true) then
+      raise exception 'AUTOTEST: événement renvoyé après suppression réappliqué (%)', v_res;
     end if;
     -- Rejet : bloque la relance suivante, même 7 jours plus tard ; résolution admin motivée la débloque ; l'écart de
     -- 8 jours depuis l'acceptation s'applique ensuite (7 jours : pas encore ; 8 jours : due).
@@ -1412,7 +1798,8 @@ begin
     end if;
     -- Nettoyage des essais : factures d'essai et leurs relances supprimées.
     v_res := public.supprimer_essais_finance();
-    if exists (select 1 from public.relances where facture_id in (v_f1, v_f2, v_f3)) or (v_res ->> 'relances')::int is distinct from 4 then
+    if exists (select 1 from public.relances where facture_id in (v_f1, v_f2, v_f3)) or (v_res ->> 'relances')::int is distinct from 4
+       or exists (select 1 from public.relances_evenements) or (v_res ->> 'evenements')::int is distinct from 3 then
       raise exception 'AUTOTEST: nettoyage des relances d''essai incomplet (%)', v_res;
     end if;
     raise exception 'AUTOTEST_TERMINE';
@@ -1436,7 +1823,8 @@ begin
   select md5(coalesce((select string_agg(r::text, '|' order by r.id) from public.relances r), '')
           || coalesce((select string_agg(f::text, '|' order by f.id) from public.factures f), '')
           || coalesce((select string_agg(c::text, '|' order by c.id) from public.clients c), '')
-          || coalesce((select string_agg(c::text, '|' order by c.cle) from public.compteurs c), ''))
+          || coalesce((select string_agg(c::text, '|' order by c.cle) from public.compteurs c), '')
+          || coalesce((select string_agg(e::text, '|' order by e.evenement_id) from public.relances_evenements e), ''))
     into v_apres;
   if v_apres is distinct from v_avant then
     raise exception 'Relances : l''autotest a modifié des données réelles';
