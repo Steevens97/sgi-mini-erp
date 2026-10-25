@@ -288,8 +288,9 @@ livraison reçus durablement) — voir « Relances automatiques ».
 - Module Absences et notes de frais : DÉPLOYÉ (temps 1 c981468 et temps 2 373e7a0 sur main, 24/10/2026), contrôles en
   production terminés (2e passage compris) — voir la section « Module Absences ».
 - Relances automatiques des factures : TEMPS 1 FAIT (migration 20261029100000, commit 7bd9873 sur main, 25/10/2026) ;
-  temps 2 (écrans, envois désactivés) PRÉPARÉ : branche deploiement-relances-t2 (un seul commit au-dessus de main), NON publié ; NON activées
-  (aucun envoi réel, aucun secret saisi, aucun Cron, aucune extension installée) — voir « Relances automatiques ».
+  TEMPS 2 FAIT (écrans, envois désactivés : commit e51823e sur main, 25/10/2026) ; NON activées (aucun envoi, aucun Cron, aucune
+  extension) ; secrets Vercel saisis par l'utilisateur : RESEND_API_KEY (Sending access), RESEND_COMPTE_REFERENCE=resend-sgi-1,
+  RELANCES_ADRESSE_ESSAI (pas encore redéployé) ; UNE facture d'ESSAI conservée pour le premier essai — voir « Relances automatiques ».
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
 - RÉCEPTION TECHNIQUE VALIDÉE par l'utilisateur (24/10/2026) : module RH et correctif 20261026100000.
@@ -576,7 +577,25 @@ livraison reçus durablement) — voir « Relances automatiques ».
   `essais_stockage_absences.mjs` entièrement réussis. Après le temps 2 : `parcours_absences_en_ligne.mjs` (puis sa 2e phase
   ≥ 1 h plus tard), `instantane_complet.py`. Chaque temps sur accord explicite de l'utilisateur.
 
-## Relances automatiques des factures (migration 20261029100000) — TEMPS 1 FAIT (25/10/2026) ; écrans non publiés, non activé
+## Relances automatiques des factures (migration 20261029100000) — TEMPS 1 ET 2 FAITS (25/10/2026) ; non activé
+- TEMPS 2 FAIT (accord de l'utilisateur, 25/10/2026) : commit e51823e sur main (parent 7bd9873 ; arbre = preparation-relances testé ;
+  0 fichier supabase/, 0 secret). Vercel vert ; Supabase Preview vert sans rien appliquer ; toujours 12 migrations ;
+  tests_verrouillage 450/450 ; routes /api/relances/* sans secret : 401 sans redirection (GET : 405) ;
+  `parcours_relances_en_ligne.mjs` 18/18 (relances NON activées, configuration absente, 3 blocages réels, seul bouton = simulation,
+  simulation sans écriture, manager et collaboratrice refusés) ; Utilisateurs 45/45, RH 50/50, Commercial 57/57, Finance 53/53,
+  Absences 59/59 puis 2e phase 5/5 ; instantane_complet 20/20 identiques ; 0 résidu.
+- DONNÉES D'ESSAI CONSERVÉES VOLONTAIREMENT jusqu'au premier essai d'envoi (accord de l'utilisateur, 25/10/2026 ; ce ne sont PAS des
+  résidus oubliés ; liste exacte : tests-reels/donnees_conservees/essai_relances_2026-10-25.json) : facture ESSAI-FAC-2026-0001
+  (émise par l'écran « Nouvelle facture », conditions normales [DÉMO], délai 30 jours : émission 25/10/2026, échéance 24/11/2026,
+  108,50 € TTC, statut émise, PDF « ESSAI — SANS VALEUR » archivé), devis ESSAI-DEV-2026-0001 accepté (PDF archivé), prospect et client
+  « [ESSAI] [ESSAI] Essai relances SARL » (email fictif client-essai-relances@exemple.invalid, jamais destinataire), projet
+  « [ESSAI] Projet ESSAI-DEV-2026-0001 » (au temps passé, tarif 100 €/h), 1 temps validé de 1 h (15/09/2026), fiche jetable
+  « Jetable-Relances-Collab », compteurs essai_devis_2026 et essai_facture_2026 ; compte admin jetable de préparation SUPPRIMÉ.
+  Premier créneau de relance n° 1 (J+7) : mardi 01/12/2026, 8 h–17 h en Martinique ; envoi seulement sur accord explicite séparé.
+  Tant qu'elles existent : instantane.py compte ces lignes en « résidus d'essai » (attendu, non oubli), et les parcours en ligne
+  Commercial/RH/Finance (qui attendent ESSAI-…-0001 et aucun reste) ne doivent pas être lancés ou seront faux.
+  NETTOYAGE après l'essai (sur accord) : `node tests-reels/nettoyer_essai_relances.mjs tests-reels/donnees_conservees/essai_relances_2026-10-25.json`
+  (supprimer_essais_finance → supprimer_essais_rh → fiche jetable → supprimer_essais_commercial → PDF factures et devis → contrôle 0 reste).
 - TEMPS 1 FAIT (accord de l'utilisateur, 25/10/2026) : commit 7bd9873 poussé sur main en avance rapide (parent 373e7a0 = main ;
   1 fichier ; md5 48b0c11051f7aceb92ac60709578417d = version testée ; aucun secret ; aucune ancienne migration). Vérifié avant :
   champs compte_fournisseur (texte, `^[A-Za-z0-9._-]{3,64}$`, vide tant que jamais tentée ; NOT NULL dans relances_evenements) et

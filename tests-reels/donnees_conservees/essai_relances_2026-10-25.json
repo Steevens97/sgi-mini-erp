@@ -1,0 +1,24 @@
+{
+ "cree_le": "2026-10-25T18:18:17.428Z",
+ "conserve_jusqu_a_l_essai": true,
+ "comptes": [],
+ "fiches": [
+  "95e68781-4b02-4dc8-9f60-712a5a682629"
+ ],
+ "prospect": "f326d3d7-3249-441c-8d8b-ff8ce004321a",
+ "devis": "e42b1a19-acc6-4584-b6f5-2a55b132f5e2",
+ "projet": "2f95ee76-2b7f-4e99-a404-997577c3845f",
+ "client": "d05ae9c2-1785-4e39-a1a6-5b5aa93ded83",
+ "temps": [
+  "c0b441e9-3f2b-4808-8f17-ed2cd4e02f34"
+ ],
+ "facture": "51e5b010-919b-4f71-8011-cde4b232726f",
+ "pdf_devis": "e42b1a19-acc6-4584-b6f5-2a55b132f5e2/ESSAI-DEV-2026-0001.pdf",
+ "pdf_facture": "51e5b010-919b-4f71-8011-cde4b232726f/ESSAI-FAC-2026-0001.pdf",
+ "numero": "ESSAI-FAC-2026-0001",
+ "date_emission": "2026-10-25",
+ "date_echeance": "2026-11-24",
+ "comptes_supprimes": [
+  "ed1734e3-4d65-4293-87dc-3756a93ff91e"
+ ]
+}
