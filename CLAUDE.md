@@ -288,7 +288,7 @@ livraison reçus durablement) — voir « Relances automatiques ».
 - Module Absences et notes de frais : DÉPLOYÉ (temps 1 c981468 et temps 2 373e7a0 sur main, 24/10/2026), contrôles en
   production terminés (2e passage compris) — voir la section « Module Absences ».
 - Relances automatiques des factures : TEMPS 1 FAIT (migration 20261029100000, commit 7bd9873 sur main, 25/10/2026) ;
-  temps 2 (écrans, envois désactivés) PRÉPARÉ : commit ad63f4d (branche deploiement-relances-t2), NON publié ; NON activées
+  temps 2 (écrans, envois désactivés) PRÉPARÉ : branche deploiement-relances-t2 (un seul commit au-dessus de main), NON publié ; NON activées
   (aucun envoi réel, aucun secret saisi, aucun Cron, aucune extension installée) — voir « Relances automatiques ».
 
 ## Module RH (migration 20261025100000) — DÉPLOYÉ (temps 1 et 2, 24/10/2026)
@@ -588,7 +588,7 @@ livraison reçus durablement) — voir « Relances automatiques ».
   19/19 identiques, seul changement prévu « table relances_evenements » absente → 0 ligne ; instantane : 0 résidu, 0 compteur,
   bucket justificatifs vide. Navigateur Commercial « limite » refait en LOCAL : 2/2 (brouillon local complet : adresse, TVA MQ,
   ligne ; compteur de la base d'essai à 9 999, inchangé ; compteur réel jamais touché).
-- TEMPS 2 PRÉPARÉ : commit ad63f4d (branche deploiement-relances-t2, parent 7bd9873 = main) = arbre identique à
+- TEMPS 2 PRÉPARÉ : branche deploiement-relances-t2 (un seul commit, parent 7bd9873 = main) = arbre identique à
   preparation-relances (écrans Relances, routes, tests, documentation), AUCUN fichier supabase/. Envois désactivés : sans les
   variables RELANCES_ACTIVES, RESEND_API_KEY, RELANCES_SECRET_CRON, RESEND_WEBHOOK_SECRET, RESEND_COMPTE_REFERENCE, rien
   n'est réservé ni envoyé et les deux routes répondent 401. À publier seulement sur accord.
