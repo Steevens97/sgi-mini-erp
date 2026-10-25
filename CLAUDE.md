@@ -593,6 +593,8 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   aucun secret dans requete_fournisseur, historiques, journaux, commandes Cron, migrations ou URL. Adresse de test et
   signature : à confirmer par l'utilisateur (n'en choisir aucune). Ne rien reprendre de la fiche INSEE « SG-INGENIERIE »
   (autre entreprise).
+- Approbation renouvelée le 25/10/2026 (mêmes règles) : aucun bouton ne contourne les protections ; une échéance modifiée
+  pour un test ne concerne qu'une facture d'ESSAI ; secret dans l'en-tête Authorization, jamais dans l'URL.
 - Implémentation autorisée le 25/10/2026 (branche `preparation-relances` depuis main, essais LOCAUX seulement). Précisions de
   l'utilisateur (ne plus les redemander) : le garde-fou quotidien interdit une NOUVELLE relance mais permet la reprise de la
   même demande avec sa clé ; événements de livraison en double, en retard ou dans le désordre : jamais de régression, jamais
@@ -628,12 +630,14 @@ Ne créer aucune table, n'en renommer aucune, n'ajouter aucune colonne sans dema
   Svix, 5 min) exemptées de session dans proxy.ts ; écran Finance → Relances (état de la configuration sans valeurs,
   simulation sans écriture ni envoi, factures sans PDF / clients sans email à part) et fiche relance (résolution motivée).
   RESEND_URL : essais locaux seulement (imitation) ; ne jamais le renseigner dans Vercel.
-- Tests locaux (25/10/2026) : `rejouer.sh tests_relances.sql` 123/123 ; `tests_concurrence_relances.sh` 14/14 (après
+- Tests locaux (25/10/2026) : `rejouer.sh tests_relances.sql` 124/124 (factures d'ESSAI seulement pour les échéances passées ;
+  la facture réelle de test garde une échéance future et ne reçoit aucune relance) ; `tests_concurrence_relances.sh` 14/14 (après
   rejouer.sh) ; `test_relances_martinique.sh '<instant UTC>' '<attendu>'` 6 instants × 5/5 (migration appliquée un samedi et
   le 31/12 à 22 h 30) ; `test_sabotages_relances.sh` 19/19 sabotages arrêtés ; `node --experimental-strip-types
   tests-reels/tests_relances_module.mts` 18/18 ; `essais_relances_locaux.mjs` (depuis scratchpad/essais, SGI_DEPOT=<dépôt>,
   après comptes_navigateur.sql, build local et pile_locale.sh start ; imitation du fournisseur `imitation_resend.mjs`, AUCUN
-  email) 38/38 ; `tests_verrouillage.py` 402/402 avec la migration (4d), 353/353 sans. Non-régression : Commercial 135/135,
+  email) 41/41 (dont secret placé dans l'URL sans en-tête : refusé ; écran sans aucun bouton d'envoi, de réservation ni
+  de modification d'échéance ; fiche : seul « Enregistrer la résolution ») ; `tests_verrouillage.py` 402/402 avec la migration (4d), 353/353 sans. Non-régression : Commercial 135/135,
   17/17, 30/30, PDF 14/14, numérotation piégée, passage d'année ; RH 155/155, 28/28, 5/5, 8/8 ; Finance 118/118 (avec et sans
   la migration ; tests_finance.sql adapté : une relance ne s'écrit plus directement), 88/88, 15/15, 6/6, PDF 19/19 ; Absences
   197/197 et 95/95 (horloge simulée de jour, voir « Tests locaux »), 16/16, 22/22, 6/6 × 3 ; compatibilité Utilisateurs 17/17
