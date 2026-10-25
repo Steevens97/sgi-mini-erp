@@ -97,6 +97,9 @@ try {
   verifier("sans secret : refusé (401), pas de redirection vers la connexion", r.status === 401, `HTTP ${r.status}`);
   r = await executer("Bearer " + "x".repeat(48));
   verifier("mauvais secret : refusé (401)", r.status === 401, `HTTP ${r.status}`);
+  // Secret (aléatoire, de cet essai seulement) placé dans l'URL SANS en-tête : jamais accepté.
+  r = await demander(`${B}/api/relances/executer?secret=${SECRET}&authorization=Bearer%20${SECRET}`, { method: "POST", redirect: "manual" });
+  verifier("secret dans l'URL (sans en-tête Authorization) : refusé (401)", r.status === 401, `HTTP ${r.status}`);
   r = await executer(`Bearer ${SECRET}`, "GET");
   verifier("méthode GET : refusée (405)", r.status === 405, `HTTP ${r.status}`);
   r = await executer();
@@ -229,6 +232,8 @@ try {
   verifier("écran : facture sans PDF et client sans email listés à part",
     (await page.locator("[data-sans-pdf]").textContent()).includes("ESSAI-FAC-2026-0202")
     && (await page.locator("[data-sans-email]").textContent()).includes("ESSAI-FAC-2026-0203"));
+  verifier("écran : un seul bouton, la simulation (aucun bouton d'envoi, de réservation ou de modification d'échéance)",
+    JSON.stringify(await page.locator("main button").allInnerTexts()) === JSON.stringify(["Simuler les relances du jour (aucun envoi)"]));
   const avant = { relances: sql("select count(*) from public.relances"), demandes: (await etat()).demandes.length };
   await page.click("button:has-text('Simuler les relances du jour')");
   await page.waitForSelector("[data-simulation]");
@@ -242,6 +247,8 @@ try {
   await page.goto(`${B}/finance/relances/${rh.id}`);
   verifier("fiche : relance à vérifier présentée comme bloquante, sans date d'envoi",
     (await page.content()).includes("bloque toute nouvelle relance") && (await page.locator("[data-date-envoi]").textContent()) === "—");
+  verifier("fiche : seul bouton = enregistrer un constat (aucun renvoi)",
+    JSON.stringify(await page.locator("main button").allInnerTexts()) === JSON.stringify(["Enregistrer la résolution"]));
   await page.selectOption("select[name=constat]", "aucun_envoi");
   await page.fill("input[name=motif]", "Aucun email visible chez le fournisseur");
   await page.click("button:has-text('Enregistrer la résolution')");

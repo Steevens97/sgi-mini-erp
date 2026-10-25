@@ -160,14 +160,17 @@ select rele.put('fa', rele.facture('ESSAI-FAC-2026-0101', true, date '2026-11-02
 select rele.put('fb', rele.facture('ESSAI-FAC-2026-0102', true, date '2026-11-02' - 3, true, '55555555-0000-0000-0000-0000000000e1')::text);
 select rele.put('fc', rele.facture('ESSAI-FAC-2026-0103', true, date '2026-11-02' - 20, false, '55555555-0000-0000-0000-0000000000e1')::text);
 select rele.put('fd', rele.facture('ESSAI-FAC-2026-0104', true, date '2026-11-02' - 20, true, '55555555-0000-0000-0000-0000000000e2')::text);
-select rele.put('fr', rele.facture('FAC-2026-0901', false, date '2026-11-02' - 10, true, '55555555-0000-0000-0000-0000000000a1')::text);
+-- Facture RÉELLE : échéance future normale (aucune échéance réelle n'est avancée pour un test) ; seules ses règles de
+-- demande sont vérifiées, sans aucune relance. Les scénarios d'échéance passée n'utilisent que des factures d'ESSAI.
+select rele.put('fr', rele.facture('FAC-2026-0901', false, date '2026-11-02' + 30, true, '55555555-0000-0000-0000-0000000000a1')::text);
+select rele.put('fk', rele.facture('ESSAI-FAC-2026-0112', true, date '2026-11-02' - 10, true, '55555555-0000-0000-0000-0000000000e1')::text);
 select rele.put('fe', rele.facture('ESSAI-FAC-2026-0105', true, date '2026-11-02' - 12, true, '55555555-0000-0000-0000-0000000000e1')::text);
 select rele.put('ff', rele.facture('ESSAI-FAC-2026-0106', true, date '2026-11-02' - 12, true, '55555555-0000-0000-0000-0000000000e1')::text);
 select rele.put('fg', rele.facture('ESSAI-FAC-2026-0107', true, date '2026-11-02' - 12, true, '55555555-0000-0000-0000-0000000000e1')::text);
 select rele.put('fh', rele.facture('ESSAI-FAC-2026-0108', true, date '2026-11-02' - 12, true, '55555555-0000-0000-0000-0000000000e1')::text);
 select rele.put('fi', rele.facture('ESSAI-FAC-2026-0109', true, date '2026-11-02' - 12, true, '55555555-0000-0000-0000-0000000000e1')::text);
 select rele.put('fj', rele.facture('ESSAI-FAC-2026-0110', true, date '2026-11-02' - 12, true, '55555555-0000-0000-0000-0000000000e1')::text);
-select rele.get('fa') as fa, rele.get('fb') as fb, rele.get('fc') as fc, rele.get('fd') as fd, rele.get('fr') as fr,
+select rele.get('fk') as fk, rele.get('fa') as fa, rele.get('fb') as fb, rele.get('fc') as fc, rele.get('fd') as fd, rele.get('fr') as fr,
        rele.get('fe') as fe, rele.get('ff') as ff, rele.get('fg') as fg, rele.get('fh') as fh, rele.get('fi') as fi,
        rele.get('fj') as fj \gset
 
@@ -193,7 +196,8 @@ select rele.ok('aperçu : facture sans PDF archivé signalée à part', rele.ap(
   and rele.ap(:'fc', 'pdf_disponible') = 'false');
 select rele.ok('aperçu : client sans email signalé à part', rele.ap(:'fd', 'blocage') like 'Client sans email%'
   and rele.ap(:'fd', 'email_client') = 'false');
-select rele.ok('aperçu : facture réelle J+10, relance n° 1 due', rele.ap(:'fr', 'rang') = '1');
+select rele.ok('facture réelle non échue : absente de l''aperçu, « Facture non échue. »',
+  rele.ap(:'fr', 'numero') is null and public.relances_situation(:'fr') ->> 'blocage' = 'Facture non échue.');
 select rele.ok('aperçu : aucune écriture', (select count(*) = 0 from public.relances));
 
 -- ===================== Réservation : règles et demande figée =====================
@@ -235,14 +239,22 @@ select rele.refus('demande figée : modification refusée même dans un contexte
 select rele.refus('historique réécrit refusé', format($q$do $x$ begin perform public.relances_contexte('evenement');
      update public.relances set historique = '[{"action":"faux"},{}]' where id = %L; end $x$$q$, :R1), 'ajout seul');
 
--- Relance réelle : destinataire = email du client, expéditeur de test interdit, aucune mention d'essai.
+-- Relance réelle : règles de la demande vérifiées directement (destinataire = email du client, expéditeur de test interdit,
+-- aucune mention d'essai), sans aucune réservation réelle.
 set role service_role;
 \set RR '\'77777777-0000-0000-0000-0000000000a1\''
-select rele.refus('relance réelle : autre destinataire que le client refusé', format($q$select rele.reserver(%L, '%s', 1, '{"to":"autre@client-reel.fr"}')$q$, :RR, :'fr'), 'email du client');
-select rele.refus('relance réelle : expéditeur onboarding@resend.dev refusé', format($q$select rele.reserver(%L, '%s', 1, '{"from":"SG <onboarding@resend.dev>"}')$q$, :RR, :'fr'), 'expéditeur de test');
-select rele.refus('relance réelle : mention [ESSAI] refusée', format($q$select rele.reserver(%L, '%s', 1, '{"subject":"[ESSAI] Facture FAC-2026-0901"}')$q$, :RR, :'fr'), 'mention d''essai');
-select rele.ok('relance réelle conforme : réservée (jamais envoyée dans ces tests), destinataire en minuscules',
-  (rele.reserver(:RR, :'fr', 1) ->> 'reservee')::boolean and (rele.r(:RR)).destinataire = 'compta@client-reel.fr' and not (rele.r(:RR)).essai);
+\set RX '\'77777777-0000-0000-0000-0000000000a9\''
+select rele.ok('relance réelle : autre destinataire que le client refusé',
+  public.relances_controle_requete(rele.req(:RX, :'fr', 1, '{"to":"autre@client-reel.fr"}'), :RX, :'fr') like '%email du client%');
+select rele.ok('relance réelle : expéditeur onboarding@resend.dev refusé',
+  public.relances_controle_requete(rele.req(:RX, :'fr', 1, '{"from":"SG <onboarding@resend.dev>"}'), :RX, :'fr') like '%expéditeur de test%');
+select rele.ok('relance réelle : mention [ESSAI] refusée',
+  public.relances_controle_requete(rele.req(:RX, :'fr', 1, '{"subject":"[ESSAI] Facture FAC-2026-0901"}'), :RX, :'fr') like '%mention d''essai%');
+select rele.ok('relance réelle conforme : demande acceptée (destinataire en minuscules), mais facture non échue : aucune réservation',
+  public.relances_controle_requete(rele.req(:RX, :'fr', 1), :RX, :'fr') is null
+  and rele.req(:RX, :'fr', 1) ->> 'to' = 'compta@client-reel.fr'
+  and rele.reserver(:RX, :'fr', 1) ->> 'motif' = 'Facture non échue.' and (rele.r(:RX)).id is null);
+select rele.ok('réservation d''essai (facture d''essai J+10)', (rele.reserver(:RR, :'fk', 1) ->> 'reservee')::boolean and (rele.r(:RR)).essai);
 
 -- ===================== Tentative, reprise, acceptation =====================
 select public.relances_prendre(:R1, :COMPTE) as p \gset
@@ -360,18 +372,18 @@ select rele.ok('facture réglée avant toute tentative : réservation abandonné
   public.relances_prendre(:RB, :COMPTE) ->> 'statut' = 'abandonnee' and (rele.r(:RB)).date_envoi is null);
 select rele.ok('facture réglée : plus aucune relance', public.relances_situation(:'fb') ->> 'blocage' like 'Facture non émise ou réglée%');
 select rele.heure('2026-11-03 16:00:00+00');   -- 21 h après la réservation réelle, jamais tentée
-select rele.ok('réservation expirée sans tentative (> 20 h) : abandonnée, aucun envoi (relance réelle jamais transmise)',
+select rele.ok('réservation expirée sans tentative (> 20 h) : abandonnée, aucun envoi',
   public.relances_prendre(:RR, :COMPTE) ->> 'statut' = 'abandonnee' and (rele.r(:RR)).tentatives = 0
   and (rele.r(:RR)).date_envoi is null);
 
 -- Horaires et week-end.
 select rele.heure('2026-11-07 14:00:00+00');   -- samedi 10 h
 select rele.ok('samedi : aucune relance due (hors horaires), message explicite',
-  public.relances_situation(:'fr') ->> 'blocage' = 'Hors des horaires d''envoi (du lundi au vendredi, de 8 h à 17 h, heure de Martinique).');
-select rele.ok('samedi : réservation refusée', not (rele.reserver('77777777-0000-0000-0000-0000000000a2', :'fr', 1) ->> 'reservee')::boolean);
+  public.relances_situation(:'fk') ->> 'blocage' = 'Hors des horaires d''envoi (du lundi au vendredi, de 8 h à 17 h, heure de Martinique).');
+select rele.ok('samedi : réservation refusée', not (rele.reserver('77777777-0000-0000-0000-0000000000a2', :'fk', 1) ->> 'reservee')::boolean);
 \set RL '\'77777777-0000-0000-0000-0000000000a3\''
 select rele.heure('2026-11-06 20:50:00+00');   -- vendredi 16 h 50
-select (rele.reserver(:RL, :'fr', 1, '{}') ->> 'reservee')::boolean as ok_l \gset
+select (rele.reserver(:RL, :'fk', 1, '{}') ->> 'reservee')::boolean as ok_l \gset
 select rele.heure('2026-11-06 21:05:00+00');   -- vendredi 17 h 05 : la tentative attend lundi
 select rele.ok('réservée à 16 h 50, prise à 17 h 05 : la tentative attend (hors horaires), aucune tentative comptée',
   public.relances_prendre(:RL, :COMPTE) ->> 'action' = 'attendre' and (rele.r(:RL)).tentatives = 0);
@@ -529,7 +541,8 @@ reset role;
 select rele.ok('nettoyage : factures d''essai et TOUTES leurs relances supprimées',
   (select count(*) = 0 from public.relances where essai) and (select count(*) = 0 from public.factures where essai)
   and (:'net'::jsonb ->> 'relances')::int > 0);
-select rele.ok('nettoyage : relances réelles conservées', (select count(*) from public.relances where not essai) = :reelles);
+select rele.ok('aucune relance réelle n''a existé dans ces tests (0 avant et après le nettoyage)',
+  :reelles = 0 and (select count(*) from public.relances where not essai) = 0);
 
 -- ===================== Définitions d'origine rétablies =====================
 create or replace function public.relances_maintenant()
